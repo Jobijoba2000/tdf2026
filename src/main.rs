@@ -294,7 +294,7 @@ impl<'a> State<'a> {
 
         let graph_height = (self.size.height as f64) * 0.7;
         let y_stretch = graph_height / (2700.0 * self.initial_scale); 
-        let dyn_thickness = (1.2 * (self.pos_scale / self.initial_scale).powf(0.25)) as f32;
+        let dyn_thickness = (1.2 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         
         let uniforms = Uniforms {
