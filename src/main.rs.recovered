@@ -1,0 +1,2 @@
+"use bytemuck::{Pod, Zeroable};\nuse std::sync::Arc;\nuse std::time::{Duration, Instant};\nuse winit::{\n    event::*,\n    event_loop::EventLoop,\n    window::WindowBuilder,\n};\n\n#[repr(C)]\n#[derive(Copy, Clone, Pod, Zeroable)]\nstruct Vertex {\n    po
+<truncated 17035 bytes>
