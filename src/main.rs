@@ -309,13 +309,13 @@ impl<'a> State<'a> {
             }
         }
         let profile_y_screen = (current_ele * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32);
-
         let uniforms = Uniforms {
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
             y_stretch: y_stretch as f32, _pad1: rel_scale, color: [1.0, 1.0, 1.0, 1.0],
-            mouse_pos: [self.mouse_pos[0], profile_y_screen], _pad2: [0.0, 0.0],
+            mouse_pos: [self.mouse_pos[0], profile_y_screen],
+            _pad2: [0.0, 0.0],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -331,15 +331,13 @@ impl<'a> State<'a> {
             let anchor_alt = [self.mouse_pos[0] + gap + (w_alt_px * rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
             for i in 0..(pos_alt.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: [anchor_alt[0], anchor_alt[1]], size: s }); }
 
-            let dist_text = format!("{:.1} km", world_x / 1000.0);
+            let dist_text = format!("{:.2} km", world_x / 1000.0);
             let (pos_dist, uvs_dist) = font.get_text_geometry(&dist_text);
             let mut width_dist = 0.0;
             for c in dist_text.chars() { width_dist += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_dist_px = width_dist * s;
             let anchor_dist = [self.mouse_pos[0] + gap + (w_dist_px * rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
             for i in 0..(pos_dist.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: [anchor_dist[0], anchor_dist[1]], size: s }); }
-            let dot_pos = [[-1.0,-1.0], [1.0,-1.0], [-1.0,1.0], [-1.0,1.0], [1.0,-1.0], [1.0,1.0]];
-            for p in dot_pos { dyn_vertices.push(TextVertex { pos: p, uv: [0.0,0.0], anchor: [world_x, current_ele], size: 1.0 }); }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&dyn_buf, 0, bytemuck::cast_slice(&dyn_vertices));
@@ -368,11 +366,7 @@ impl<'a> State<'a> {
                 pass.set_pipeline(&self.text_screen_pipeline); 
                 pass.set_vertex_buffer(0, dyn_buf.slice(..));
                 let num_dyn = dyn_vertices.len() as u32;
-                if num_dyn >= 6 {
-                    pass.draw(0..num_dyn - 6, 0..1); 
-                    pass.set_pipeline(&self.dot_render_pipeline); 
-                    pass.draw(num_dyn - 6..num_dyn, 0..1); 
-                }
+                pass.draw(0..num_dyn, 0..1); 
             }
         }
         self.queue.submit(std::iter::once(encoder.finish()));

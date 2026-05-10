@@ -129,9 +129,33 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
 
 @fragment
 fn fs_text(in: TextVertexOutput) -> @location(0) vec4<f32> {
-    let alpha = textureSample(t_color, t_sampler, in.uv).a;
-    if (alpha < 0.01) { discard; }
-    return vec4<f32>(1.0, 1.0, 1.0, alpha);
+    let tex_size = vec2<f32>(textureDimensions(t_color));
+    
+    // Gras : voisinage immédiat
+    let bold_off = 0.8 / tex_size;
+    let a_center = textureSample(t_color, t_sampler, in.uv).a;
+    let a_bold = max(a_center, max(
+        max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(bold_off.x, 0.0)).a, 
+            textureSample(t_color, t_sampler, in.uv - vec2<f32>(bold_off.x, 0.0)).a),
+        max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, bold_off.y)).a,
+            textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, bold_off.y)).a)
+    ));
+    
+    // Outline : voisinage plus large
+    let outline_off = 2.0 / tex_size;
+    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(outline_off.x, 0.0)).a;
+    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(outline_off.x, 0.0)).a;
+    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, outline_off.y)).a;
+    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, outline_off.y)).a;
+    let a_outline = max(max(a1, a2), max(a3, a4));
+    
+    let final_alpha = max(a_bold, a_outline);
+    if (final_alpha < 0.01) { discard; }
+    
+    // Mix entre noir (bordure) et blanc (texte gras)
+    let color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_bold);
+    
+    return vec4<f32>(color, final_alpha);
 }
 
 // --- Reticule ---
@@ -175,10 +199,10 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    if (dist_x < center_size && dist_y < center_size) {
-        if (dist_x < cross_thickness || dist_y < cross_thickness) {
-            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-        }
+    let dist_sq = dist_x * dist_x + dist_y * dist_y;
+    let radius = 6.0;
+    if (dist_sq < radius * radius) {
+        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
     }
 
     if (dist_x < line_thickness) {
