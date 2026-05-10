@@ -7,7 +7,8 @@ struct Uniforms {
     _pad1: f32,
     color: vec4<f32>,
     mouse_pos: vec2<f32>,
-    _pad2: vec2<f32>,
+    raw_mouse_x: f32,
+    max_dist: f32,
 };
 
 @group(0) @binding(0)
@@ -205,8 +206,12 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(1.0, 1.0, 1.0, 1.0);
     }
 
-    if (dist_x < line_thickness) {
-        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    let dist_x_line = abs(pos.x - uniforms.raw_mouse_x);
+    if (dist_x_line < line_thickness) {
+        let mouse_world_x = (uniforms.raw_mouse_x - uniforms.translate.x) / uniforms.scale;
+        if (mouse_world_x >= 0.0 && mouse_world_x <= uniforms.max_dist) {
+            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
     }
     discard;
 }

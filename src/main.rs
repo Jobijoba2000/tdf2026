@@ -44,7 +44,8 @@ struct Uniforms {
     _pad1: f32,
     color: [f32; 4],
     mouse_pos: [f32; 2],
-    _pad2: [f32; 2],
+    raw_mouse_x: f32,
+    max_dist: f32,
 }
 
 struct ZoomAnimation {
@@ -238,7 +239,7 @@ impl<'a> State<'a> {
         let uniforms = Uniforms {
             translate: [margin_x as f32, translate_y as f32], scale: initial_scale as f32, thickness: 1.2,
             resolution: [size.width as f32, size.height as f32], y_stretch: y_stretch as f32, _pad1: 1.0,
-            color: [1.0, 1.0, 1.0, 1.0], mouse_pos: [0.0, 0.0], _pad2: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0], mouse_pos: [0.0, 0.0], raw_mouse_x: 0.0, max_dist: max_dist as f32,
         };
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
@@ -308,14 +309,16 @@ impl<'a> State<'a> {
                 break;
             }
         }
+        let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
         let profile_y_screen = (current_ele * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32);
         let uniforms = Uniforms {
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
             y_stretch: y_stretch as f32, _pad1: rel_scale, color: [1.0, 1.0, 1.0, 1.0],
-            mouse_pos: [self.mouse_pos[0], profile_y_screen],
-            _pad2: [0.0, 0.0],
+            mouse_pos: [profile_x_screen, profile_y_screen],
+            raw_mouse_x: self.mouse_pos[0],
+            max_dist: self.max_dist,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -328,7 +331,8 @@ impl<'a> State<'a> {
             let mut width_alt = 0.0;
             for c in alt_text.chars() { width_alt += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_alt_px = width_alt * s;
-            let anchor_alt = [self.mouse_pos[0] + gap + (w_alt_px * rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
+            let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
+            let anchor_alt = [profile_x_screen + gap + (w_alt_px * rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
             for i in 0..(pos_alt.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: [anchor_alt[0], anchor_alt[1]], size: s }); }
 
             let dist_text = format!("{:.2} km", world_x / 1000.0);
@@ -336,7 +340,7 @@ impl<'a> State<'a> {
             let mut width_dist = 0.0;
             for c in dist_text.chars() { width_dist += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_dist_px = width_dist * s;
-            let anchor_dist = [self.mouse_pos[0] + gap + (w_dist_px * rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
+            let anchor_dist = [profile_x_screen + gap + (w_dist_px * rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
             for i in 0..(pos_dist.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: [anchor_dist[0], anchor_dist[1]], size: s }); }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
