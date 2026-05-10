@@ -142,11 +142,18 @@ struct ReticuleOutput {
 
 @vertex
 fn vs_reticule(@builtin(vertex_index) vertex_index: u32) -> ReticuleOutput {
+    var pos = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>(-1.0,  1.0),
+        vec2<f32>( 1.0, -1.0),
+        vec2<f32>( 1.0,  1.0)
+    );
     var out: ReticuleOutput;
-    let x = f32(i32(vertex_index) / 2) * 2.0 - 1.0;
-    let y = f32(i32(vertex_index) % 2) * 2.0 - 1.0;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.screen_pos = vec2<f32>((x + 1.0) * 0.5 * uniforms.resolution.x, (y + 1.0) * 0.5 * uniforms.resolution.y);
+    let p = pos[vertex_index];
+    out.position = vec4<f32>(p, 0.0, 1.0);
+    out.screen_pos = (p * 0.5 + 0.5) * uniforms.resolution;
     return out;
 }
 
@@ -154,13 +161,19 @@ fn vs_reticule(@builtin(vertex_index) vertex_index: u32) -> ReticuleOutput {
 fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     let mouse = uniforms.mouse_pos;
     let pos = in.screen_pos;
-    let line_thickness = uniforms.thickness * 0.4;
+    let line_thickness = uniforms.thickness * 0.8;
     let dash_period = 15.0;
-    let center_size = 35.0;
-    let cross_thickness = uniforms.thickness * 1.2;
+    let center_size = 15.0;
+    let cross_thickness = uniforms.thickness * 1.5;
 
     let dist_x = abs(pos.x - mouse.x);
     let dist_y = abs(pos.y - mouse.y);
+
+    let world_y = (pos.y - uniforms.translate.y) / (uniforms.y_stretch * uniforms.scale);
+    let ext_y = 270.0;
+    if (world_y < -ext_y || world_y > 2700.0 + ext_y) {
+        discard;
+    }
 
     if (dist_x < center_size && dist_y < center_size) {
         if (dist_x < cross_thickness || dist_y < cross_thickness) {
@@ -169,14 +182,7 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     }
 
     if (dist_x < line_thickness) {
-        if (floor(abs(pos.y - mouse.y) / dash_period) % 2.0 == 1.0) {
-            return vec4<f32>(1.0, 1.0, 1.0, 0.8);
-        }
-    }
-    if (dist_y < line_thickness) {
-        if (floor(abs(pos.x - mouse.x) / dash_period) % 2.0 == 1.0) {
-            return vec4<f32>(1.0, 1.0, 1.0, 0.8);
-        }
+        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
     }
     discard;
 }

@@ -207,7 +207,7 @@ impl<'a> State<'a> {
         let fa = font_atlas::FontAtlas::from_file("data/fonts/font.ttf");
         let mut static_text_vertices = Vec::new();
         let tick_len = max_dist * 0.01;
-        for h in (0..=2700).step_by(100) {
+        for h in (0..=2700).step_by(200) {
             let y = h as f32;
             add_line([-tick_len, y], [0.0, y], &mut axes_indices, &mut axes_vertices);
             if let Some(ref font) = fa {
@@ -294,18 +294,9 @@ impl<'a> State<'a> {
 
         let graph_height = (self.size.height as f64) * 0.7;
         let y_stretch = graph_height / (2700.0 * self.initial_scale); 
-        let dyn_thickness = (1.2 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
+        let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         
-        let uniforms = Uniforms {
-            translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
-            scale: self.pos_scale as f32, thickness: dyn_thickness,
-            resolution: [self.size.width as f32, self.size.height as f32],
-            y_stretch: y_stretch as f32, _pad1: rel_scale, color: [1.0, 1.0, 1.0, 1.0],
-            mouse_pos: self.mouse_pos, _pad2: [0.0, 0.0],
-        };
-        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
-
         let world_x = ((self.mouse_pos[0] - self.pos_translate[0] as f32) / self.pos_scale as f32).clamp(0.0, self.max_dist);
         let mut current_ele = 0.0;
         for i in 0..self.profile_points.len()-1 {
@@ -317,23 +308,35 @@ impl<'a> State<'a> {
                 break;
             }
         }
+        let profile_y_screen = (current_ele * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32);
+
+        let uniforms = Uniforms {
+            translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
+            scale: self.pos_scale as f32, thickness: dyn_thickness,
+            resolution: [self.size.width as f32, self.size.height as f32],
+            y_stretch: y_stretch as f32, _pad1: rel_scale, color: [1.0, 1.0, 1.0, 1.0],
+            mouse_pos: [self.mouse_pos[0], profile_y_screen], _pad2: [0.0, 0.0],
+        };
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let mut dyn_vertices = Vec::new();
         if let Some(ref font) = self.fa {
-            let gap = 21.0; let s = 0.5; let row_h = font.font_size * 1.4;
-            let alt_text = format!("{:.0}m", current_ele);
+            let gap = 4.0 * rel_scale; let s = 0.4; let row_h = font.font_size * 1.4;
+            let half_h = (row_h * s * rel_scale) / 2.0;
+            let alt_text = format!("{:.0} m", current_ele);
             let (pos_alt, uvs_alt) = font.get_text_geometry(&alt_text);
             let mut width_alt = 0.0;
             for c in alt_text.chars() { width_alt += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_alt_px = width_alt * s;
-            let anchor_alt = [self.mouse_pos[0] - gap - w_alt_px / 2.0, self.mouse_pos[1] + gap + (row_h * s) / 2.0];
+            let anchor_alt = [self.mouse_pos[0] + gap + (w_alt_px * rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
             for i in 0..(pos_alt.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: [anchor_alt[0], anchor_alt[1]], size: s }); }
-            let dist_text = format!("{:.1}km", world_x / 1000.0);
+
+            let dist_text = format!("{:.1} km", world_x / 1000.0);
             let (pos_dist, uvs_dist) = font.get_text_geometry(&dist_text);
             let mut width_dist = 0.0;
             for c in dist_text.chars() { width_dist += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_dist_px = width_dist * s;
-            let anchor_dist = [self.mouse_pos[0] + gap + w_dist_px / 2.0, self.mouse_pos[1] + gap + (row_h * s) / 2.0];
+            let anchor_dist = [self.mouse_pos[0] + gap + (w_dist_px * rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
             for i in 0..(pos_dist.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: [anchor_dist[0], anchor_dist[1]], size: s }); }
             let dot_pos = [[-1.0,-1.0], [1.0,-1.0], [-1.0,1.0], [-1.0,1.0], [1.0,-1.0], [1.0,1.0]];
             for p in dot_pos { dyn_vertices.push(TextVertex { pos: p, uv: [0.0,0.0], anchor: [world_x, current_ele], size: 1.0 }); }
@@ -364,10 +367,11 @@ impl<'a> State<'a> {
                 pass.draw(0..self.num_static_text_vertices, 0..1);
                 pass.set_pipeline(&self.text_screen_pipeline); 
                 pass.set_vertex_buffer(0, dyn_buf.slice(..));
-                if dyn_vertices.len() >= 18 {
-                    pass.draw(0..12, 0..1); 
+                let num_dyn = dyn_vertices.len() as u32;
+                if num_dyn >= 6 {
+                    pass.draw(0..num_dyn - 6, 0..1); 
                     pass.set_pipeline(&self.dot_render_pipeline); 
-                    pass.draw(12..18, 0..1); 
+                    pass.draw(num_dyn - 6..num_dyn, 0..1); 
                 }
             }
         }
