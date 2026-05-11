@@ -155,6 +155,8 @@ struct State<'a> {
     num_header_text_vertices: u32,
     header_bg_buffer: wgpu::Buffer,
     header_render_pipeline: wgpu::RenderPipeline,
+    header_border_buffer: wgpu::Buffer,
+    num_header_border_vertices: u32,
 }
 
 
@@ -431,6 +433,7 @@ impl<'a> State<'a> {
 
         let header_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let header_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let header_border_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
         let mut state = State {
             surface, device, queue, config, size, window,
@@ -453,11 +456,15 @@ impl<'a> State<'a> {
             num_header_text_vertices: 0,
             header_bg_buffer,
             header_render_pipeline,
+            header_border_buffer,
+            num_header_border_vertices: 0,
         };
 
+        let rpw = (size.width as f32) - 352.0;
+        let header_w = rpw * 0.5;
         let header_bg_data = [
-            PolyVertex { pos: [352.0, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [352.0, size.height as f32] },
-            PolyVertex { pos: [352.0, size.height as f32] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32] },
+            PolyVertex { pos: [355.0, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0, size.height as f32 - 5.0] },
+            PolyVertex { pos: [355.0, size.height as f32 - 5.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 5.0] },
         ];
         state.queue.write_buffer(&state.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
 
@@ -612,11 +619,38 @@ impl<'a> State<'a> {
             ]);
         }
         self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
+        let rpw = (size.width as f32) - 352.0;
+        let header_w = rpw * 0.5;
+        let h_top = size.height as f32 - 5.0;
+        let h_bottom = size.height as f32 - 145.0;
+        let h_left = 355.0;
+        let h_right = 355.0 + header_w;
+
         let header_bg_data = [
-            PolyVertex { pos: [352.0, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [352.0, size.height as f32] },
-            PolyVertex { pos: [352.0, size.height as f32] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32] },
+            PolyVertex { pos: [h_left, h_bottom] }, PolyVertex { pos: [h_right, h_bottom] }, PolyVertex { pos: [h_left, h_top] },
+            PolyVertex { pos: [h_left, h_top] }, PolyVertex { pos: [h_right, h_bottom] }, PolyVertex { pos: [h_right, h_top] },
         ];
         self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
+
+        // Cadre blanc pour le header
+        let b = 1.0;
+        let h_rects = [
+            [h_left, h_top - b, h_right, h_top], // top
+            [h_left, h_bottom, h_right, h_bottom + b], // bottom
+            [h_left, h_bottom, h_left + b, h_top], // left
+            [h_right - b, h_bottom, h_right, h_top], // right
+        ];
+        let mut h_border_vertices = Vec::new();
+        for r in h_rects {
+            h_border_vertices.push(PolyVertex { pos: [r[0], r[1]] });
+            h_border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
+            h_border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
+            h_border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
+            h_border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
+            h_border_vertices.push(PolyVertex { pos: [r[2], r[3]] });
+        }
+        self.num_header_border_vertices = h_border_vertices.len() as u32;
+        self.queue.write_buffer(&self.header_border_buffer, 0, bytemuck::cast_slice(&h_border_vertices));
 
         self.select_stage(self.selected_stage_idx);
     }
@@ -694,7 +728,7 @@ impl<'a> State<'a> {
         let active_stage = &self.stages[idx];
         
         // Extract data for header
-        let stage_name = active_stage.name.clone();
+        let _stage_name = active_stage.name.clone();
         let stage_start = active_stage.start.clone();
         let stage_finish = active_stage.finish.clone();
         let stage_dist = active_stage.max_dist;
@@ -765,7 +799,7 @@ impl<'a> State<'a> {
             // Line 1: Etape N
             let line1 = format!("Etape {}", idx + 1);
             let (pos, uvs) = font.get_text_geometry(&line1);
-            let anchor1 = [370.0, self.size.height as f32 - 50.0];
+            let anchor1 = [370.0, self.size.height as f32 - 55.0];
             for i in 0..(pos.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor1, size: 1.1 });
             }
@@ -781,7 +815,7 @@ impl<'a> State<'a> {
             // Line 3: Distance
             let line3 = format!("{:.1} km", stage_dist / 1000.0);
             let (pos, uvs) = font.get_text_geometry(&line3);
-            let anchor3 = [370.0, self.size.height as f32 - 135.0];
+            let anchor3 = [370.0, self.size.height as f32 - 130.0];
             for i in 0..(pos.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor3, size: 0.4 });
             }
@@ -1036,6 +1070,10 @@ impl<'a> State<'a> {
             pass.set_vertex_buffer(0, self.header_bg_buffer.slice(..));
             pass.draw(0..6, 0..1);
 
+            pass.set_pipeline(&self.sparkline_render_pipeline); // fs_white
+            pass.set_vertex_buffer(0, self.header_border_buffer.slice(..));
+            pass.draw(0..self.num_header_border_vertices, 0..1);
+
             if let Some(ref bg) = self.atlas_bind_group {
                 pass.set_pipeline(&self.text_ui_pipeline); 
                 pass.set_bind_group(1, bg, &[]);
@@ -1120,7 +1158,7 @@ fn main() {
                 }
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
                 let target_scale = (if amount > 0.0 { state.pos_scale * 1.5 } else { state.pos_scale / 1.5 }).clamp(state.initial_scale, state.initial_scale * 500.0);
-                let mut target_translate = state.pos_translate;
+                let target_translate;
                 if target_scale == state.initial_scale { 
                     let rpw = (state.size.width as f64) - 350.0;
                     let margin_x = 350.0 + rpw * 0.1;
