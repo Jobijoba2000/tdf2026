@@ -106,7 +106,7 @@ struct State<'a> {
     
     global_max_dist: f32,
     global_max_ele: f32,
-    global_max_ratio: f32,
+    global_max_ratio_diff: f32,
     
     stages: Vec<Stage>,
     selected_stage_idx: usize,
@@ -115,6 +115,7 @@ struct State<'a> {
     
     max_dist: f32,
     max_ele: f32,
+    min_ele: f32,
     profile_points: Vec<[f32; 2]>,
 
     pos_translate: [f64; 2],
@@ -236,6 +237,7 @@ impl<'a> State<'a> {
         let active_stage = &stages[selected_stage_idx];
         let max_dist = active_stage.max_dist;
         let max_ele = active_stage.max_ele;
+        let min_ele = active_stage.min_ele;
         let profile_points = active_stage.profile_points.clone();
 
         // Create buffers large enough for the biggest stage or just resize
@@ -408,7 +410,7 @@ impl<'a> State<'a> {
         let global_max_dist = stages.iter().map(|s| s.max_dist).fold(0.0, f32::max);
         let global_max_ele = stages.iter().map(|s| s.max_ele).fold(0.0, f32::max);
 
-        let global_max_ratio = stages.iter().map(|s| s.max_ele / s.max_dist).fold(0.0f32, f32::max);
+        let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max);
 
         let mut state = State {
             surface, device, queue, config, size, window,
@@ -419,9 +421,9 @@ impl<'a> State<'a> {
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_static_text_vertices: 0,
             num_stage_border_vertices: 0, num_spark_vertices: 0,
-            global_max_dist, global_max_ele, global_max_ratio,
+            global_max_dist, global_max_ele, global_max_ratio_diff,
             stages, selected_stage_idx, sidebar_text_buffer, num_sidebar_text_vertices: 0,
-            max_dist, max_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
+            max_dist, max_ele, min_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None, fa,
             sidebar_scroll_y: 0.0,
             sidebar_target_scroll_y: 0.0,
@@ -549,11 +551,16 @@ impl<'a> State<'a> {
 
     fn update_axes(&mut self) {
         let mut axes_vertices = Vec::new();
-        let mut axes_indices = Vec::new();
+        let mut axes_indices: Vec<u32> = Vec::new();
         let max_dist = self.max_dist;
         let ext_x = max_dist * 0.05;
-        let max_ele_displayed = self.max_dist * self.global_max_ratio;
-        let ext_y = max_ele_displayed * 0.1;
+        let delta_e_displayed = self.max_dist * self.global_max_ratio_diff;
+        let mid_ele = (self.max_ele + self.min_ele) / 2.0;
+        let mut y_min = mid_ele - delta_e_displayed / 2.0;
+        if y_min < 0.0 { y_min = 0.0; } // Don't go below sea level if not necessary
+        let y_max = y_min + delta_e_displayed;
+        
+        let ext_y = delta_e_displayed * 0.1;
         
         let mut add_line = |p1: [f32; 2], p2: [f32; 2]| {
             let base = axes_vertices.len() as u32;
@@ -564,20 +571,24 @@ impl<'a> State<'a> {
             axes_indices.extend_from_slice(&[base, base+1, base+2, base+1, base+3, base+2]);
         };
         
-        add_line([-ext_x, 0.0], [max_dist + ext_x, 0.0]);
-        add_line([0.0, -ext_y], [0.0, max_ele_displayed + ext_y]);
-        add_line([max_dist, -ext_y], [max_dist, max_ele_displayed + ext_y]);
+        add_line([-ext_x, y_min], [max_dist + ext_x, y_min]);
+        add_line([0.0, y_min - ext_y], [0.0, y_max + ext_y]);
+        add_line([max_dist, y_min - ext_y], [max_dist, y_max + ext_y]);
 
         let mut static_text_vertices = Vec::new();
         let tick_len = max_dist * 0.01;
         
-        let step = if max_ele_displayed > 4000.0 { 500 }
-                   else if max_ele_displayed > 2000.0 { 200 }
-                   else if max_ele_displayed > 1000.0 { 100 }
+        let step = if delta_e_displayed > 4000.0 { 500 }
+                   else if delta_e_displayed > 2000.0 { 200 }
+                   else if delta_e_displayed > 1000.0 { 100 }
                    else { 50 };
 
-        for h in (0..=(max_ele_displayed as i32)).step_by(step) {
+        let mut start_h = (y_min / step as f32).floor() as i32 * step;
+        if start_h < 0 { start_h = 0; }
+
+        for h in (start_h..=(y_max as i32)).step_by(step as usize) {
             let y = h as f32;
+            if y < y_min { continue; }
             add_line([-tick_len, y], [0.0, y]);
             if let Some(ref font) = self.fa {
                 let text = format!("{}m", h);
@@ -606,6 +617,7 @@ impl<'a> State<'a> {
         let active_stage = &self.stages[idx];
         self.max_dist = active_stage.max_dist;
         self.max_ele = active_stage.max_ele;
+        self.min_ele = active_stage.min_ele;
         self.profile_points = active_stage.profile_points.clone();
 
         // Write to existing buffers (assuming they are large enough or recreated if needed)
@@ -701,8 +713,13 @@ impl<'a> State<'a> {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         let graph_height = (self.size.height as f64) * 0.6;
-        let max_ele_displayed = (self.max_dist as f64) * (self.global_max_ratio as f64);
-        let y_stretch = graph_height / (max_ele_displayed * self.initial_scale); 
+        let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
+        let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
+        
+        let mid_ele = (self.max_ele + self.min_ele) / 2.0;
+        let mut y_min = mid_ele - (delta_e_displayed as f32) / 2.0;
+        if y_min < 0.0 { y_min = 0.0; }
+
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         let capped_rel_scale = rel_scale.min(10.0);
@@ -728,9 +745,10 @@ impl<'a> State<'a> {
             }
         }
         let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
-        let profile_y_screen = (current_ele * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32);
+        // Shift Y rendering based on y_min
+        let profile_y_screen = (current_ele - y_min) * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32;
         let uniforms = Uniforms {
-            translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
+            translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32 - (y_min * y_stretch as f32 * self.pos_scale as f32)],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
             y_stretch: y_stretch as f32, _pad1: capped_rel_scale, color: [1.0, 1.0, 1.0, 1.0],
