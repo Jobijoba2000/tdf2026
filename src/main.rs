@@ -297,16 +297,26 @@ impl<'a> State<'a> {
         let y_stretch = graph_height / (2700.0 * self.initial_scale); 
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
+        let capped_rel_scale = rel_scale.min(10.0);
         
-        let world_x = ((self.mouse_pos[0] - self.pos_translate[0] as f32) / self.pos_scale as f32).clamp(0.0, self.max_dist);
+        let mouse_world_x = (self.mouse_pos[0] - self.pos_translate[0] as f32) / self.pos_scale as f32;
+        let world_x = mouse_world_x.clamp(0.0, self.max_dist);
         let mut current_ele = 0.0;
-        for i in 0..self.profile_points.len()-1 {
-            let p1 = self.profile_points[i];
-            let p2 = self.profile_points[i+1];
-            if world_x >= p1[0] && world_x <= p2[0] {
-                let t = (world_x - p1[0]) / (p2[0] - p1[0]);
-                current_ele = p1[1] + (p2[1] - p1[1]) * t;
-                break;
+        if !self.profile_points.is_empty() {
+            if world_x <= 0.0 {
+                current_ele = self.profile_points[0][1];
+            } else if world_x >= self.max_dist {
+                current_ele = self.profile_points.last().unwrap()[1];
+            } else {
+                for i in 0..self.profile_points.len()-1 {
+                    let p1 = self.profile_points[i];
+                    let p2 = self.profile_points[i+1];
+                    if world_x >= p1[0] && world_x <= p2[0] {
+                        let t = (world_x - p1[0]) / (p2[0] - p1[0]);
+                        current_ele = p1[1] + (p2[1] - p1[1]) * t;
+                        break;
+                    }
+                }
             }
         }
         let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
@@ -315,24 +325,23 @@ impl<'a> State<'a> {
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
-            y_stretch: y_stretch as f32, _pad1: rel_scale, color: [1.0, 1.0, 1.0, 1.0],
+            y_stretch: y_stretch as f32, _pad1: capped_rel_scale, color: [1.0, 1.0, 1.0, 1.0],
             mouse_pos: [profile_x_screen, profile_y_screen],
-            raw_mouse_x: self.mouse_pos[0],
+            raw_mouse_x: if mouse_world_x >= 0.0 && mouse_world_x <= self.max_dist { self.mouse_pos[0] } else { -1000.0 },
             max_dist: self.max_dist,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
         let mut dyn_vertices = Vec::new();
         if let Some(ref font) = self.fa {
-            let gap = 4.0 * rel_scale; let s = 0.4; let row_h = font.font_size * 1.4;
-            let half_h = (row_h * s * rel_scale) / 2.0;
+            let gap = 4.0 * capped_rel_scale; let s = 0.4; let row_h = font.font_size * 1.4;
+            let half_h = (row_h * s * capped_rel_scale) / 2.0;
             let alt_text = format!("{:.0} m", current_ele);
             let (pos_alt, uvs_alt) = font.get_text_geometry(&alt_text);
             let mut width_alt = 0.0;
             for c in alt_text.chars() { width_alt += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_alt_px = width_alt * s;
-            let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
-            let anchor_alt = [profile_x_screen + gap + (w_alt_px * rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
+            let anchor_alt = [profile_x_screen + gap + (w_alt_px * capped_rel_scale) / 2.0, profile_y_screen + half_h + 2.0];
             for i in 0..(pos_alt.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: [anchor_alt[0], anchor_alt[1]], size: s }); }
 
             let dist_text = format!("{:.2} km", world_x / 1000.0);
@@ -340,7 +349,7 @@ impl<'a> State<'a> {
             let mut width_dist = 0.0;
             for c in dist_text.chars() { width_dist += font.metrics.get(&c).map(|m| m.advance).unwrap_or(0.0); }
             let w_dist_px = width_dist * s;
-            let anchor_dist = [profile_x_screen + gap + (w_dist_px * rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
+            let anchor_dist = [profile_x_screen + gap + (w_dist_px * capped_rel_scale) / 2.0, profile_y_screen - half_h - 2.0];
             for i in 0..(pos_dist.len() / 2) { dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: [anchor_dist[0], anchor_dist[1]], size: s }); }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });

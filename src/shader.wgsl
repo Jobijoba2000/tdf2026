@@ -201,10 +201,7 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     }
 
     let dist_sq = dist_x * dist_x + dist_y * dist_y;
-    let radius = 6.0;
-    if (dist_sq < radius * radius) {
-        return vec4<f32>(1.0, 1.0, 1.0, 1.0);
-    }
+
 
     let dist_x_line = abs(pos.x - uniforms.raw_mouse_x);
     if (dist_x_line < line_thickness) {
