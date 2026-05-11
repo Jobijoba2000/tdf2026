@@ -59,6 +59,14 @@ struct ZoomAnimation {
     target_translate: [f64; 2],
 }
 
+#[derive(Copy, Clone)]
+struct ScrollAnimation {
+    start_time: Instant,
+    duration: Duration,
+    start_y: f32,
+    target_y: f32,
+}
+
 struct Stage {
     name: String,
     start: String,
@@ -144,6 +152,7 @@ struct State<'a> {
     hover_stage_idx: Option<usize>,
     
     animation: Option<ZoomAnimation>,
+    sidebar_animation: Option<ScrollAnimation>,
     fa: Option<font_atlas::FontAtlas>,
     sidebar_scroll_y: f32,
     sidebar_target_scroll_y: f32,
@@ -447,7 +456,9 @@ impl<'a> State<'a> {
             global_max_dist, global_max_ele, global_max_ratio_diff,
             stages, selected_stage_idx, sidebar_text_buffer, num_sidebar_text_vertices: 0,
             max_dist, max_ele, min_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
-            mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None, fa,
+            mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None,
+            sidebar_animation: None,
+            fa,
             sidebar_scroll_y: 0.0,
             sidebar_target_scroll_y: 0.0,
             slope_start: None,
@@ -619,38 +630,7 @@ impl<'a> State<'a> {
             ]);
         }
         self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
-        let rpw = (size.width as f32) - 352.0;
-        let header_w = rpw * 0.5;
-        let h_top = size.height as f32 - 5.0;
-        let h_bottom = size.height as f32 - 145.0;
-        let h_left = 355.0;
-        let h_right = 355.0 + header_w;
-
-        let header_bg_data = [
-            PolyVertex { pos: [h_left, h_bottom] }, PolyVertex { pos: [h_right, h_bottom] }, PolyVertex { pos: [h_left, h_top] },
-            PolyVertex { pos: [h_left, h_top] }, PolyVertex { pos: [h_right, h_bottom] }, PolyVertex { pos: [h_right, h_top] },
-        ];
-        self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
-
-        // Cadre blanc pour le header
-        let b = 1.0;
-        let h_rects = [
-            [h_left, h_top - b, h_right, h_top], // top
-            [h_left, h_bottom, h_right, h_bottom + b], // bottom
-            [h_left, h_bottom, h_left + b, h_top], // left
-            [h_right - b, h_bottom, h_right, h_top], // right
-        ];
-        let mut h_border_vertices = Vec::new();
-        for r in h_rects {
-            h_border_vertices.push(PolyVertex { pos: [r[0], r[1]] });
-            h_border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
-            h_border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
-            h_border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
-            h_border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
-            h_border_vertices.push(PolyVertex { pos: [r[2], r[3]] });
-        }
-        self.num_header_border_vertices = h_border_vertices.len() as u32;
-        self.queue.write_buffer(&self.header_border_buffer, 0, bytemuck::cast_slice(&h_border_vertices));
+        self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
 
         self.select_stage(self.selected_stage_idx);
     }
@@ -826,17 +806,30 @@ impl<'a> State<'a> {
         let rpw = (self.size.width as f64) - 350.0;
         let graph_width = rpw * 0.8;
         let margin_x = 350.0 + rpw * 0.1;
+        let _graph_height = (self.size.height as f64 - 260.0) * 0.5;
         self.initial_scale = graph_width / (self.max_dist as f64);
         self.pos_scale = self.initial_scale;
-        self.pos_translate = [margin_x, (self.size.height as f64) * 0.2];
+        self.pos_translate = [margin_x, (self.size.height as f64 - 260.0) * 0.2];
 
     }
 
     fn update(&mut self) {
-        // Sidebar scroll smoothing
-        if (self.sidebar_target_scroll_y - self.sidebar_scroll_y).abs() > 0.1 {
-            self.sidebar_scroll_y += (self.sidebar_target_scroll_y - self.sidebar_scroll_y) * 0.15;
+        // Sidebar scroll animation (Cubic Ease)
+        let mut scroll_finished = false;
+        if let Some(anim) = self.sidebar_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 1.0 - (1.0 - t).powi(3);
+            self.sidebar_scroll_y = anim.start_y + (anim.target_y - anim.start_y) * eased_t;
             self.rebuild_ui();
+            if t >= 1.0 { 
+                self.sidebar_target_scroll_y = anim.target_y;
+                scroll_finished = true;
+            }
+        }
+        if scroll_finished {
+            self.sidebar_animation = None;
         }
 
         if let Some(ref anim) = self.animation {
@@ -892,7 +885,7 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        let graph_height = (self.size.height as f64) * 0.5;
+        let graph_height = (self.size.height as f64 - 260.0) * 0.5;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
@@ -903,6 +896,12 @@ impl<'a> State<'a> {
             let padding = (delta_e_displayed as f32) * 0.1;
             (self.min_ele - padding).max(0.0)
         };
+        let _y_max = y_min + delta_e_displayed as f32;
+
+        // Limiter le graphique pour qu'il ne monte pas dans le header (top - 260.0)
+        if self.pos_translate[1] > (self.size.height as f64 - 260.0) {
+            self.pos_translate[1] = self.size.height as f64 - 260.0;
+        }
 
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
@@ -1066,14 +1065,6 @@ impl<'a> State<'a> {
             }
 
             // 6. Header
-            pass.set_pipeline(&self.header_render_pipeline);
-            pass.set_vertex_buffer(0, self.header_bg_buffer.slice(..));
-            pass.draw(0..6, 0..1);
-
-            pass.set_pipeline(&self.sparkline_render_pipeline); // fs_white
-            pass.set_vertex_buffer(0, self.header_border_buffer.slice(..));
-            pass.draw(0..self.num_header_border_vertices, 0..1);
-
             if let Some(ref bg) = self.atlas_bind_group {
                 pass.set_pipeline(&self.text_ui_pipeline); 
                 pass.set_bind_group(1, bg, &[]);
@@ -1152,8 +1143,19 @@ fn main() {
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if state.mouse_pos[0] < 350.0 {
-                    let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f32 * 100.0, MouseScrollDelta::PixelDelta(p) => p.y as f32 };
-                    state.sidebar_target_scroll_y = (state.sidebar_target_scroll_y - amount).max(0.0).min((state.stages.len() as f32 * 260.0) - (state.size.height as f32 - 100.0));
+                    let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f32 * 250.0, MouseScrollDelta::PixelDelta(p) => p.y as f32 * 2.0 };
+                    let max_scroll = ((state.stages.len() as f32 * 260.0) - (state.size.height as f32 - 100.0)).max(0.0);
+                    let new_target = (state.sidebar_target_scroll_y - amount).clamp(0.0, max_scroll);
+                    
+                    if new_target != state.sidebar_target_scroll_y {
+                        state.sidebar_target_scroll_y = new_target;
+                        state.sidebar_animation = Some(ScrollAnimation {
+                            start_time: Instant::now(),
+                            duration: Duration::from_millis(400),
+                            start_y: state.sidebar_scroll_y,
+                            target_y: new_target,
+                        });
+                    }
                     return;
                 }
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
