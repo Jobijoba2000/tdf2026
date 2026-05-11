@@ -186,7 +186,7 @@ impl<'a> State<'a> {
         };
         surface.configure(&device, &config);
 
-        let compressed_data = std::fs::read("data/profile.bin").expect("Failed to read profile.bin");
+        let compressed_data = include_bytes!("../data/profile.bin");
         let mut decoder = flate2::read::GzDecoder::new(&compressed_data[..]);
         let mut bin_data = Vec::new();
         use std::io::Read;
@@ -283,7 +283,7 @@ impl<'a> State<'a> {
         });
         queue.write_buffer(&poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices));
 
-        let fa = font_atlas::FontAtlas::from_file("data/fonts/font.ttf");
+        let fa = font_atlas::FontAtlas::from_bytes(include_bytes!("../data/fonts/font.ttf"));
         
         // Sidebar text
         let mut sidebar_text_vertices = Vec::new();
@@ -970,7 +970,10 @@ impl<'a> State<'a> {
 
 fn main() {
     let event_loop = EventLoop::new().unwrap();
-    let window = Arc::new(WindowBuilder::new().with_title("TDF 2026 - Profile").build(&event_loop).unwrap());
+    let window = Arc::new(WindowBuilder::new()
+        .with_title("TDF 2026 - Profile")
+        .build(&event_loop).unwrap());
+    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
     let mut state = pollster::block_on(State::new(Arc::clone(&window)));
     event_loop.run(move |event, elwt| match event {
         Event::WindowEvent { ref event, window_id } if window_id == state.window.id() => match event {
