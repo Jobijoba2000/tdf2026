@@ -9,6 +9,8 @@ struct Uniforms {
     mouse_pos: vec2<f32>,
     raw_mouse_x: f32,
     max_dist: f32,
+    y_min: f32,
+    y_max: f32,
 };
 
 @group(0) @binding(0)
@@ -101,6 +103,11 @@ fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
 @fragment
 fn fs_sidebar_bg() -> @location(0) vec4<f32> {
     return vec4<f32>(0.1, 0.1, 0.1, 1.0);
+}
+
+@fragment
+fn fs_header_bg() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.07, 0.07, 0.07, 1.0);
 }
 
 @fragment
@@ -246,8 +253,9 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     let dist_y = abs(pos.y - mouse.y);
 
     let world_y = (pos.y - uniforms.translate.y) / (uniforms.y_stretch * uniforms.scale);
-    let ext_y = 270.0;
-    if (world_y < -ext_y || world_y > 2700.0 + ext_y) {
+    let range = uniforms.y_max - uniforms.y_min;
+    let ext_y = range * 0.05;
+    if (world_y < uniforms.y_min - ext_y || world_y > uniforms.y_max + ext_y) {
         discard;
     }
 

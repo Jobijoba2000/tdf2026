@@ -46,6 +46,8 @@ struct Uniforms {
     mouse_pos: [f32; 2],
     raw_mouse_x: f32,
     max_dist: f32,
+    y_min: f32,
+    y_max: f32,
 }
 
 struct ZoomAnimation {
@@ -148,6 +150,11 @@ struct State<'a> {
     
     slope_start: Option<[f32; 2]>, // [dist, ele]
     slope_result: Option<(f32, f32, f32)>, // [slope%, dist_diff, ele_diff]
+    
+    header_text_buffer: wgpu::Buffer,
+    num_header_text_vertices: u32,
+    header_bg_buffer: wgpu::Buffer,
+    header_render_pipeline: wgpu::RenderPipeline,
 }
 
 
@@ -317,9 +324,9 @@ impl<'a> State<'a> {
 
                 // Date & Dist
                 let date_txt = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
-                let (pos, uvs) = font.get_text_geometry(&date_txt);
-                let anchor = [80.0, y_top - 65.0];
-                for i in 0..(pos.len() / 2) {
+                let (_pos, _uvs) = font.get_text_geometry(&date_txt);
+                let _anchor = [80.0, y_top - 65.0];
+                for _i in 0..(_pos.len() / 2) {
                 }
             }
         }
@@ -331,7 +338,7 @@ impl<'a> State<'a> {
         let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 128, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let _sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
@@ -368,6 +375,7 @@ impl<'a> State<'a> {
         queue.write_buffer(&sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
 
         let ui_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+        let header_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_header_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let selected_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_selected_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let hover_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None }); // Will use a different background logic? No, just a different color.
         
@@ -421,6 +429,9 @@ impl<'a> State<'a> {
         // K avec 20% de marge verticale pour que le profil ne touche jamais les axes
         let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max) * 1.2;
 
+        let header_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let header_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_screen_pipeline, text_ui_pipeline, reticule_render_pipeline, dot_render_pipeline,
@@ -438,7 +449,17 @@ impl<'a> State<'a> {
             sidebar_target_scroll_y: 0.0,
             slope_start: None,
             slope_result: None,
+            header_text_buffer,
+            num_header_text_vertices: 0,
+            header_bg_buffer,
+            header_render_pipeline,
         };
+
+        let header_bg_data = [
+            PolyVertex { pos: [352.0, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [352.0, size.height as f32] },
+            PolyVertex { pos: [352.0, size.height as f32] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32] },
+        ];
+        state.queue.write_buffer(&state.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
 
         state.rebuild_ui();
         state.update_axes();
@@ -483,7 +504,7 @@ impl<'a> State<'a> {
                 let x_start = x_left + 15.0;
                 
                 // 1. Nom de l'étape
-                let title = format!("{}. {}", idx + 1, stage.name);
+                let title = stage.name.clone();
                 let (pos, uvs) = font.get_text_geometry(&title);
                 let anchor = [x_start, y_top - 25.0];
                 for i in 0..(pos.len() / 2) {
@@ -515,7 +536,7 @@ impl<'a> State<'a> {
                 
                 let padding_bottom = 20.0;
                 let y_bottom = (y_top - card_h) + padding_bottom;
-                let y_base = y_bottom; 
+                let _y_base = y_bottom; 
                 
                 let min = stage.min_ele;
                 let max = stage.max_ele;
@@ -591,6 +612,12 @@ impl<'a> State<'a> {
             ]);
         }
         self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
+        let header_bg_data = [
+            PolyVertex { pos: [352.0, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [352.0, size.height as f32] },
+            PolyVertex { pos: [352.0, size.height as f32] }, PolyVertex { pos: [size.width as f32, size.height as f32 - 150.0] }, PolyVertex { pos: [size.width as f32, size.height as f32] },
+        ];
+        self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
+
         self.select_stage(self.selected_stage_idx);
     }
 
@@ -625,7 +652,6 @@ impl<'a> State<'a> {
         add_line([max_dist, y_min - ext_y], [max_dist, y_max + ext_y]);
 
         let mut static_text_vertices = Vec::new();
-        let tick_len = max_dist * 0.01;
         
         let step = if delta_e_displayed > 4000.0 { 500 }
                    else if delta_e_displayed > 2000.0 { 200 }
@@ -666,13 +692,19 @@ impl<'a> State<'a> {
         if idx >= self.stages.len() { return; }
         self.selected_stage_idx = idx;
         let active_stage = &self.stages[idx];
+        
+        // Extract data for header
+        let stage_name = active_stage.name.clone();
+        let stage_start = active_stage.start.clone();
+        let stage_finish = active_stage.finish.clone();
+        let stage_dist = active_stage.max_dist;
+
         self.max_dist = active_stage.max_dist;
         self.max_ele = active_stage.max_ele;
         self.min_ele = active_stage.min_ele;
         self.profile_points = active_stage.profile_points.clone();
 
-        // Write to existing buffers (assuming they are large enough or recreated if needed)
-        // For simplicity and to avoid size issues, we'll recreate them here if size changed
+        // Write to existing buffers
         self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"), size: (active_stage.vertices.len() * 4) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -727,12 +759,42 @@ impl<'a> State<'a> {
 
         self.update_axes();
  
+        // Header text (3 lines)
+        let mut header_text_vertices = Vec::new();
+        if let Some(ref font) = self.fa {
+            // Line 1: Etape N
+            let line1 = format!("Etape {}", idx + 1);
+            let (pos, uvs) = font.get_text_geometry(&line1);
+            let anchor1 = [370.0, self.size.height as f32 - 50.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor1, size: 1.1 });
+            }
+            
+            // Line 2: Start > Finish
+            let line2 = format!("{} > {}", stage_start, stage_finish);
+            let (pos, uvs) = font.get_text_geometry(&line2);
+            let anchor2 = [370.0, self.size.height as f32 - 100.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor2, size: 0.55 });
+            }
+
+            // Line 3: Distance
+            let line3 = format!("{:.1} km", stage_dist / 1000.0);
+            let (pos, uvs) = font.get_text_geometry(&line3);
+            let anchor3 = [370.0, self.size.height as f32 - 135.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor3, size: 0.4 });
+            }
+        }
+        self.num_header_text_vertices = header_text_vertices.len() as u32;
+        self.queue.write_buffer(&self.header_text_buffer, 0, bytemuck::cast_slice(&header_text_vertices));
+
         let rpw = (self.size.width as f64) - 350.0;
         let graph_width = rpw * 0.8;
         let margin_x = 350.0 + rpw * 0.1;
         self.initial_scale = graph_width / (self.max_dist as f64);
         self.pos_scale = self.initial_scale;
-        self.pos_translate = [margin_x, (self.size.height as f64) * 0.25];
+        self.pos_translate = [margin_x, (self.size.height as f64) * 0.2];
 
     }
 
@@ -843,6 +905,8 @@ impl<'a> State<'a> {
             mouse_pos: [profile_x_screen, profile_y_screen],
             raw_mouse_x: if mouse_world_x >= 0.0 && mouse_world_x <= self.max_dist && self.mouse_pos[0] > 350.0 { self.mouse_pos[0] } else { -1000.0 },
             max_dist: self.max_dist,
+            y_min,
+            y_max: y_min + delta_e_displayed as f32,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -870,7 +934,7 @@ impl<'a> State<'a> {
                 let text = format!("Pente: {:.2}%  |  D+: {:.1}m  |  Dist: {:.2}km", res.0, res.2, res.1 / 1000.0);
                 let (pos, uvs) = font.get_text_geometry(&text);
                 let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
-                let anchor_y = (self.size.height as f32 - 40.0).min(self.size.height as f32 - text_half_h);
+                let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
                 let anchor = [370.0, anchor_y];
                 for i in 0..(pos.len() / 2) { 
                     dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
@@ -879,7 +943,7 @@ impl<'a> State<'a> {
                 let text = "Cliquez sur le 2eme point (clic droit)";
                 let (pos, uvs) = font.get_text_geometry(&text);
                 let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
-                let anchor_y = (self.size.height as f32 - 40.0).min(self.size.height as f32 - text_half_h);
+                let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
                 let anchor = [370.0, anchor_y];
                 for i in 0..(pos.len() / 2) { 
                     dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
@@ -965,6 +1029,18 @@ impl<'a> State<'a> {
                 pass.set_vertex_buffer(0, dyn_buf.slice(..));
                 let num_dyn = dyn_vertices.len() as u32;
                 pass.draw(0..num_dyn, 0..1); 
+            }
+
+            // 6. Header
+            pass.set_pipeline(&self.header_render_pipeline);
+            pass.set_vertex_buffer(0, self.header_bg_buffer.slice(..));
+            pass.draw(0..6, 0..1);
+
+            if let Some(ref bg) = self.atlas_bind_group {
+                pass.set_pipeline(&self.text_ui_pipeline); 
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, self.header_text_buffer.slice(..)); 
+                pass.draw(0..self.num_header_text_vertices, 0..1);
             }
         }
 
