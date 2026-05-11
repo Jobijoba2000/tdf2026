@@ -145,6 +145,9 @@ struct State<'a> {
     fa: Option<font_atlas::FontAtlas>,
     sidebar_scroll_y: f32,
     sidebar_target_scroll_y: f32,
+    
+    slope_start: Option<[f32; 2]>, // [dist, ele]
+    slope_result: Option<(f32, f32, f32)>, // [slope%, dist_diff, ele_diff]
 }
 
 
@@ -364,7 +367,7 @@ impl<'a> State<'a> {
         let hover_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None }); // Will use a different background logic? No, just a different color.
         
         // Sparkline pipeline
-        let sparkline_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_white", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+        let sparkline_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 8, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_yellow", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
         let selected_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 48, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let hover_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 48, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -428,6 +431,8 @@ impl<'a> State<'a> {
             mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None, fa,
             sidebar_scroll_y: 0.0,
             sidebar_target_scroll_y: 0.0,
+            slope_start: None,
+            slope_result: None,
         };
 
         state.rebuild_ui();
@@ -500,9 +505,13 @@ impl<'a> State<'a> {
                 let width = 310.0;
                 // Hauteur calculée pour que l'angle des pentes soit identique au graphique détaillé
                 let graph_width = self.size.width as f32 - 500.0;
-                let graph_height = self.size.height as f32 * 0.8;
-                let height = (width * graph_height / graph_width).min(140.0); // cappé pour rester dans le cadre
-                let y_base = y_top - 100.0 - height;
+                let graph_height = self.size.height as f32 * 0.7;
+                let height = (width * graph_height / graph_width).min(120.0); // légèrement réduit pour le padding
+                
+                let padding_bottom = 20.0;
+                let y_bottom = (y_top - card_h) + padding_bottom;
+                let y_base = y_bottom; 
+                
                 let min = stage.min_ele;
                 let max = stage.max_ele;
                 
@@ -520,9 +529,9 @@ impl<'a> State<'a> {
                 for j in 0..59 {
                     let x1 = x_start + (j as f32 / 59.0) * width;
                     let x2 = x_start + ((j+1) as f32 / 59.0) * width;
-                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - display_min) / display_range) * (height - 15.0);
-                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - display_min) / display_range) * (height - 15.0);
-                    let y_bottom = y_base + 10.0;
+                    let y1 = y_bottom + ((stage.sparkline[j] - display_min) / display_range) * height;
+                    let y2 = y_bottom + ((stage.sparkline[j+1] - display_min) / display_range) * height;
+                    
                     // Triangle fill sous la courbe
                     spark_vertices.push(PolyVertex { pos: [x1, y1] });
                     spark_vertices.push(PolyVertex { pos: [x2, y2] });
@@ -536,8 +545,8 @@ impl<'a> State<'a> {
                 for j in 0..59 {
                     let x1 = x_start + (j as f32 / 59.0) * width;
                     let x2 = x_start + ((j+1) as f32 / 59.0) * width;
-                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - display_min) / display_range) * (height - 15.0);
-                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - display_min) / display_range) * (height - 15.0);
+                    let y1 = y_bottom + ((stage.sparkline[j] - display_min) / display_range) * height;
+                    let y2 = y_bottom + ((stage.sparkline[j+1] - display_min) / display_range) * height;
                     let dx = x2 - x1; let dy = y2 - y1; let len = (dx*dx + dy*dy).sqrt();
                     let ux = -dy / len; let uy = dx / len; let w = 0.8;
                     spark_vertices.push(PolyVertex { pos: [x1 + ux*w, y1 + uy*w] });
@@ -712,8 +721,8 @@ impl<'a> State<'a> {
 
         self.update_axes();
  
-        let margin_x = 400.0;
-        let graph_width = (self.size.width as f64) - margin_x - 100.0;
+        let margin_x = 425.0;
+        let graph_width = (self.size.width as f64) - margin_x - 75.0;
         self.initial_scale = graph_width / (self.max_dist as f64);
         self.pos_scale = self.initial_scale;
         self.pos_translate = [margin_x, (self.size.height as f64) * 0.15];
@@ -739,6 +748,30 @@ impl<'a> State<'a> {
         }
     }
 
+    pub fn get_profile_at_mouse(&self) -> [f32; 2] {
+        let mouse_world_x = (self.mouse_pos[0] - self.pos_translate[0] as f32) / self.pos_scale as f32;
+        let world_x = mouse_world_x.clamp(0.0, self.max_dist);
+        let mut current_ele = 0.0;
+        if !self.profile_points.is_empty() {
+            if world_x <= 0.0 {
+                current_ele = self.profile_points[0][1];
+            } else if world_x >= self.max_dist {
+                current_ele = self.profile_points.last().unwrap()[1];
+            } else {
+                for i in 0..self.profile_points.len()-1 {
+                    let p1 = self.profile_points[i];
+                    let p2 = self.profile_points[i+1];
+                    if world_x >= p1[0] && world_x <= p2[0] {
+                        let t = (world_x - p1[0]) / (p2[0] - p1[0]);
+                        current_ele = p1[1] + (p2[1] - p1[1]) * t;
+                        break;
+                    }
+                }
+            }
+        }
+        [world_x, current_ele]
+    }
+
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
@@ -756,7 +789,7 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        let graph_height = (self.size.height as f64) * 0.8;
+        let graph_height = (self.size.height as f64) * 0.7;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
@@ -823,6 +856,23 @@ impl<'a> State<'a> {
             let anchor_dist = [profile_x_screen + gap, profile_y_screen - half_h - 5.0];
             for i in 0..(pos_dist.len() / 2) { 
                 dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: anchor_dist, size: s }); 
+            }
+
+            // Affichage de la pente (Slope)
+            if let Some(res) = self.slope_result {
+                let text = format!("Pente: {:.2}%  |  D+: {:.1}m  |  Dist: {:.2}km", res.0, res.2, res.1 / 1000.0);
+                let (pos, uvs) = font.get_text_geometry(&text);
+                let anchor = [370.0, self.size.height as f32 - 40.0];
+                for i in 0..(pos.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
+                }
+            } else if let Some(_) = self.slope_start {
+                let text = "Cliquez sur le 2eme point (clic droit)";
+                let (pos, uvs) = font.get_text_geometry(&text);
+                let anchor = [370.0, self.size.height as f32 - 40.0];
+                for i in 0..(pos.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
+                }
             }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -942,13 +992,33 @@ fn main() {
                 }
                 state.last_mouse_pos = [position.x, position.y];
             }
-            WindowEvent::MouseInput { state: s, button: MouseButton::Left, .. } => {
-                state.mouse_pressed = *s == ElementState::Pressed;
-                if state.mouse_pressed && state.mouse_pos[0] < 350.0 {
-                    let y_from_top = state.size.height as f32 - state.mouse_pos[1];
-                    let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
-                    if idx >= 0 && (idx as usize) < state.stages.len() {
-                        state.select_stage(idx as usize);
+            WindowEvent::MouseInput { state: s, button, .. } => {
+                if *button == MouseButton::Left {
+                    state.mouse_pressed = *s == ElementState::Pressed;
+                    if state.mouse_pressed && state.mouse_pos[0] < 350.0 {
+                        let y_from_top = state.size.height as f32 - state.mouse_pos[1];
+                        let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
+                        if idx >= 0 && (idx as usize) < state.stages.len() {
+                            state.select_stage(idx as usize);
+                            state.slope_start = None;
+                            state.slope_result = None;
+                        }
+                    }
+                } else if *button == MouseButton::Right && *s == ElementState::Pressed {
+                    if state.mouse_pos[0] >= 352.0 {
+                        let p = state.get_profile_at_mouse();
+                        if let Some(start) = state.slope_start {
+                            let dist_diff = (p[0] - start[0]).abs();
+                            let ele_diff = p[1] - start[1];
+                            if dist_diff > 0.1 {
+                                let slope = (ele_diff / dist_diff) * 100.0;
+                                state.slope_result = Some((slope, dist_diff, ele_diff));
+                            }
+                            state.slope_start = None;
+                        } else {
+                            state.slope_start = Some(p);
+                            state.slope_result = None;
+                        }
                     }
                 }
             }
@@ -962,7 +1032,7 @@ fn main() {
                 let target_scale = (if amount > 0.0 { state.pos_scale * 1.5 } else { state.pos_scale / 1.5 }).clamp(state.initial_scale, state.initial_scale * 500.0);
                 let mut target_translate = state.pos_translate;
                 if target_scale == state.initial_scale { 
-                    target_translate = [580.0, (state.size.height as f64) * 0.15]; 
+                    target_translate = [425.0, (state.size.height as f64) * 0.15]; 
                 } else {
                     let wx = (state.mouse_pos[0] as f64 - state.pos_translate[0]) / state.pos_scale;
                     let wy = (state.mouse_pos[1] as f64 - state.pos_translate[1]) / state.pos_scale;
