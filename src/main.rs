@@ -186,7 +186,12 @@ impl<'a> State<'a> {
         };
         surface.configure(&device, &config);
 
-        let bin_data = std::fs::read("data/profile.bin").expect("Failed to read profile.bin");
+        let compressed_data = std::fs::read("data/profile.bin").expect("Failed to read profile.bin");
+        let mut decoder = flate2::read::GzDecoder::new(&compressed_data[..]);
+        let mut bin_data = Vec::new();
+        use std::io::Read;
+        decoder.read_to_end(&mut bin_data).expect("Failed to decompress profile.bin");
+        
         let mut offset = 0;
         let num_stages = u32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap());
         offset += 4;
@@ -832,7 +837,7 @@ impl<'a> State<'a> {
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32 - (y_min * y_stretch as f32 * self.pos_scale as f32)],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
-            y_stretch: y_stretch as f32, _pad1: capped_rel_scale, color: [1.0, 1.0, 1.0, 1.0],
+            y_stretch: y_stretch as f32, _pad1: capped_rel_scale, color: [1.0, 1.0, 0.0, 1.0],
             mouse_pos: [profile_x_screen, profile_y_screen],
             raw_mouse_x: if mouse_world_x >= 0.0 && mouse_world_x <= self.max_dist && self.mouse_pos[0] > 350.0 { self.mouse_pos[0] } else { -1000.0 },
             max_dist: self.max_dist,

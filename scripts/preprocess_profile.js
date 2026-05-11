@@ -199,5 +199,7 @@ for (const s of allStagesData) {
     Buffer.from(s.indices.buffer).copy(finalBuf, offset); offset += s.indices.byteLength;
 }
 
-fs.writeFileSync(binPath, finalBuf);
-console.log(`Saved ${allStagesData.length} stages to ${binPath} (Total size: ${(totalSize / 1024 / 1024).toFixed(2)} MB)`);
+const zlib = require('zlib');
+const compressedBuf = zlib.gzipSync(finalBuf);
+fs.writeFileSync(binPath, compressedBuf);
+console.log(`Saved ${allStagesData.length} stages to ${binPath} (Original: ${(totalSize / 1024 / 1024).toFixed(2)} MB, Compressed: ${(compressedBuf.length / 1024 / 1024).toFixed(2)} MB)`);
