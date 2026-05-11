@@ -106,6 +106,7 @@ struct State<'a> {
     
     global_max_dist: f32,
     global_max_ele: f32,
+    global_max_ratio: f32,
     
     stages: Vec<Stage>,
     selected_stage_idx: usize,
@@ -407,6 +408,8 @@ impl<'a> State<'a> {
         let global_max_dist = stages.iter().map(|s| s.max_dist).fold(0.0, f32::max);
         let global_max_ele = stages.iter().map(|s| s.max_ele).fold(0.0, f32::max);
 
+        let global_max_ratio = stages.iter().map(|s| s.max_ele / s.max_dist).fold(0.0f32, f32::max);
+
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_screen_pipeline, text_ui_pipeline, reticule_render_pipeline, dot_render_pipeline,
@@ -416,7 +419,7 @@ impl<'a> State<'a> {
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_static_text_vertices: 0,
             num_stage_border_vertices: 0, num_spark_vertices: 0,
-            global_max_dist, global_max_ele,
+            global_max_dist, global_max_ele, global_max_ratio,
             stages, selected_stage_idx, sidebar_text_buffer, num_sidebar_text_vertices: 0,
             max_dist, max_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None, fa,
@@ -549,7 +552,8 @@ impl<'a> State<'a> {
         let mut axes_indices = Vec::new();
         let max_dist = self.max_dist;
         let ext_x = max_dist * 0.05;
-        let ext_y = 2700.0 * 0.1;
+        let max_ele_displayed = self.max_dist * self.global_max_ratio;
+        let ext_y = max_ele_displayed * 0.1;
         
         let mut add_line = |p1: [f32; 2], p2: [f32; 2]| {
             let base = axes_vertices.len() as u32;
@@ -561,12 +565,18 @@ impl<'a> State<'a> {
         };
         
         add_line([-ext_x, 0.0], [max_dist + ext_x, 0.0]);
-        add_line([0.0, -ext_y], [0.0, 2700.0 + ext_y]);
-        add_line([max_dist, -ext_y], [max_dist, 2700.0 + ext_y]);
+        add_line([0.0, -ext_y], [0.0, max_ele_displayed + ext_y]);
+        add_line([max_dist, -ext_y], [max_dist, max_ele_displayed + ext_y]);
 
         let mut static_text_vertices = Vec::new();
         let tick_len = max_dist * 0.01;
-        for h in (0..=2700).step_by(200) {
+        
+        let step = if max_ele_displayed > 4000.0 { 500 }
+                   else if max_ele_displayed > 2000.0 { 200 }
+                   else if max_ele_displayed > 1000.0 { 100 }
+                   else { 50 };
+
+        for h in (0..=(max_ele_displayed as i32)).step_by(step) {
             let y = h as f32;
             add_line([-tick_len, y], [0.0, y]);
             if let Some(ref font) = self.fa {
@@ -690,8 +700,9 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        let graph_height = (self.size.height as f64) * 0.7;
-        let y_stretch = graph_height / (2700.0 * self.initial_scale); 
+        let graph_height = (self.size.height as f64) * 0.6;
+        let max_ele_displayed = (self.max_dist as f64) * (self.global_max_ratio as f64);
+        let y_stretch = graph_height / (max_ele_displayed * self.initial_scale); 
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         let capped_rel_scale = rel_scale.min(10.0);
@@ -850,7 +861,7 @@ fn main() {
                 state.mouse_pos = [position.x as f32, (state.size.height as f64 - position.y) as f32];
                 if state.mouse_pos[0] < 350.0 {
                     let y_from_top = position.y as f32;
-                    let idx = ((y_from_top - 60.0 + state.sidebar_scroll_y) / 135.0) as i32;
+                    let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
                     if idx >= 0 && (idx as usize) < state.stages.len() {
                         state.hover_stage_idx = Some(idx as usize);
                     } else {
@@ -869,7 +880,7 @@ fn main() {
                 state.mouse_pressed = *s == ElementState::Pressed;
                 if state.mouse_pressed && state.mouse_pos[0] < 350.0 {
                     let y_from_top = state.size.height as f32 - state.mouse_pos[1];
-                    let idx = ((y_from_top - 60.0 + state.sidebar_scroll_y) / 135.0) as i32;
+                    let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
                     if idx >= 0 && (idx as usize) < state.stages.len() {
                         state.select_stage(idx as usize);
                     }
@@ -878,7 +889,7 @@ fn main() {
             WindowEvent::MouseWheel { delta, .. } => {
                 if state.mouse_pos[0] < 350.0 {
                     let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f32 * 100.0, MouseScrollDelta::PixelDelta(p) => p.y as f32 };
-                    state.sidebar_target_scroll_y = (state.sidebar_target_scroll_y - amount).max(0.0).min((state.stages.len() as f32 * 135.0) - (state.size.height as f32 - 200.0));
+                    state.sidebar_target_scroll_y = (state.sidebar_target_scroll_y - amount).max(0.0).min((state.stages.len() as f32 * 260.0) - (state.size.height as f32 - 100.0));
                     return;
                 }
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
