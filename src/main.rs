@@ -510,7 +510,7 @@ impl<'a> State<'a> {
                 let width = 310.0;
                 // Hauteur calculée pour que l'angle des pentes soit identique au graphique détaillé
                 let graph_width = self.size.width as f32 - 500.0;
-                let graph_height = self.size.height as f32 * 0.7;
+                let graph_height = self.size.height as f32 * 0.5;
                 let height = (width * graph_height / graph_width).min(120.0); // légèrement réduit pour le padding
                 
                 let padding_bottom = 20.0;
@@ -636,6 +636,7 @@ impl<'a> State<'a> {
         if start_h < 0 { start_h = 0; }
 
         for h in (start_h..=(y_max as i32)).step_by(step as usize) {
+            if h == 0 { continue; }
             let y = h as f32;
             if y < y_min { continue; }
             if let Some(ref font) = self.fa {
@@ -726,11 +727,12 @@ impl<'a> State<'a> {
 
         self.update_axes();
  
-        let margin_x = 425.0;
-        let graph_width = (self.size.width as f64) - margin_x - 75.0;
+        let rpw = (self.size.width as f64) - 350.0;
+        let graph_width = rpw * 0.8;
+        let margin_x = 350.0 + rpw * 0.1;
         self.initial_scale = graph_width / (self.max_dist as f64);
         self.pos_scale = self.initial_scale;
-        self.pos_translate = [margin_x, (self.size.height as f64) * 0.15];
+        self.pos_translate = [margin_x, (self.size.height as f64) * 0.25];
 
     }
 
@@ -794,7 +796,7 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        let graph_height = (self.size.height as f64) * 0.7;
+        let graph_height = (self.size.height as f64) * 0.5;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
@@ -867,14 +869,18 @@ impl<'a> State<'a> {
             if let Some(res) = self.slope_result {
                 let text = format!("Pente: {:.2}%  |  D+: {:.1}m  |  Dist: {:.2}km", res.0, res.2, res.1 / 1000.0);
                 let (pos, uvs) = font.get_text_geometry(&text);
-                let anchor = [370.0, self.size.height as f32 - 40.0];
+                let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
+                let anchor_y = (self.size.height as f32 - 40.0).min(self.size.height as f32 - text_half_h);
+                let anchor = [370.0, anchor_y];
                 for i in 0..(pos.len() / 2) { 
                     dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
                 }
             } else if let Some(_) = self.slope_start {
                 let text = "Cliquez sur le 2eme point (clic droit)";
                 let (pos, uvs) = font.get_text_geometry(&text);
-                let anchor = [370.0, self.size.height as f32 - 40.0];
+                let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
+                let anchor_y = (self.size.height as f32 - 40.0).min(self.size.height as f32 - text_half_h);
+                let anchor = [370.0, anchor_y];
                 for i in 0..(pos.len() / 2) { 
                     dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
                 }
@@ -1040,7 +1046,9 @@ fn main() {
                 let target_scale = (if amount > 0.0 { state.pos_scale * 1.5 } else { state.pos_scale / 1.5 }).clamp(state.initial_scale, state.initial_scale * 500.0);
                 let mut target_translate = state.pos_translate;
                 if target_scale == state.initial_scale { 
-                    target_translate = [425.0, (state.size.height as f64) * 0.15]; 
+                    let rpw = (state.size.width as f64) - 350.0;
+                    let margin_x = 350.0 + rpw * 0.1;
+                    target_translate = [margin_x, (state.size.height as f64) * 0.25]; 
                 } else {
                     let wx = (state.mouse_pos[0] as f64 - state.pos_translate[0]) / state.pos_scale;
                     let wy = (state.mouse_pos[1] as f64 - state.pos_translate[1]) / state.pos_scale;
