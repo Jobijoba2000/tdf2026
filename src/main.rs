@@ -892,7 +892,7 @@ impl<'a> State<'a> {
             self.pos_translate[1] = self.size.height as f64 - 260.0;
         }
 
-        let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
+        let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.20)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         let capped_rel_scale = rel_scale.min(10.0);
         
