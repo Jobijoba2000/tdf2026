@@ -74,7 +74,7 @@ fn vs_poly(@location(0) pos: vec2<f32>) -> VertexOutput {
 
 @fragment
 fn fs_poly() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.15, 0.15, 0.15, 1.0); 
+    return vec4<f32>(0.22, 0.22, 0.22, 1.0); 
 }
 
 @fragment
@@ -124,8 +124,15 @@ struct TextVertexOutput {
 @vertex
 fn vs_text(in: TextVertexInput) -> TextVertexOutput {
     var out: TextVertexOutput;
-    let anchor_proj = project(in.anchor);
-    // On multiplie par rel_scale pour que la police suive le zoom
+    // Cap the X scale at the same level as text size (10x)
+    let initial_scale = (uniforms.resolution.x - 500.0) / uniforms.max_dist;
+    let rel_scale = uniforms.scale / initial_scale;
+    let capped_scale = initial_scale * min(rel_scale, 10.0);
+    
+    let anchor_proj = vec2<f32>(
+        in.anchor.x * capped_scale + uniforms.translate.x,
+        in.anchor.y * uniforms.y_stretch * uniforms.scale + uniforms.translate.y
+    );
     let final_pos = anchor_proj + vec2<f32>(in.pos.x, -in.pos.y) * (in.size * uniforms._pad1);
     out.position = vec4<f32>(
         (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,

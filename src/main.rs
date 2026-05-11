@@ -410,7 +410,8 @@ impl<'a> State<'a> {
         let global_max_dist = stages.iter().map(|s| s.max_dist).fold(0.0, f32::max);
         let global_max_ele = stages.iter().map(|s| s.max_ele).fold(0.0, f32::max);
 
-        let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max);
+        // K avec 20% de marge verticale pour que le profil ne touche jamais les axes
+        let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max) * 1.2;
 
         let mut state = State {
             surface, device, queue, config, size, window,
@@ -495,19 +496,48 @@ impl<'a> State<'a> {
                     sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_i, size: 0.25 });
                 }
 
-                // 4. Sparklines (Profil simplifié)
-                let y_base = y_top - 200.0;
-                let width = 310.0; // Largeur fixe pour toutes les étapes
-                let height = 65.0;
+                // 4. Sparklines (Profil simplifié) avec formule proportionnelle
+                let width = 310.0;
+                // Hauteur calculée pour que l'angle des pentes soit identique au graphique détaillé
+                let graph_width = self.size.width as f32 - 500.0;
+                let graph_height = self.size.height as f32 * 0.8;
+                let height = (width * graph_height / graph_width).min(140.0); // cappé pour rester dans le cadre
+                let y_base = y_top - 100.0 - height;
                 let min = stage.min_ele;
                 let max = stage.max_ele;
-                let range = (max - min).max(1.0);
                 
+                // Même formule que le graphique principal
+                let delta_e = stage.max_dist * self.global_max_ratio_diff;
+                let display_min = if max <= delta_e {
+                    0.0
+                } else {
+                    let padding = delta_e * 0.1;
+                    (min - padding).max(0.0)
+                };
+                let display_range = delta_e.max(1.0);
+                
+                // Remplissage blanc semi-opaque sous la courbe
                 for j in 0..59 {
                     let x1 = x_start + (j as f32 / 59.0) * width;
                     let x2 = x_start + ((j+1) as f32 / 59.0) * width;
-                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - min) / range) * (height - 15.0);
-                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - min) / range) * (height - 15.0);
+                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - display_min) / display_range) * (height - 15.0);
+                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - display_min) / display_range) * (height - 15.0);
+                    let y_bottom = y_base + 10.0;
+                    // Triangle fill sous la courbe
+                    spark_vertices.push(PolyVertex { pos: [x1, y1] });
+                    spark_vertices.push(PolyVertex { pos: [x2, y2] });
+                    spark_vertices.push(PolyVertex { pos: [x1, y_bottom] });
+                    spark_vertices.push(PolyVertex { pos: [x1, y_bottom] });
+                    spark_vertices.push(PolyVertex { pos: [x2, y2] });
+                    spark_vertices.push(PolyVertex { pos: [x2, y_bottom] });
+                }
+                
+                // Ligne du profil (épaisse)
+                for j in 0..59 {
+                    let x1 = x_start + (j as f32 / 59.0) * width;
+                    let x2 = x_start + ((j+1) as f32 / 59.0) * width;
+                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - display_min) / display_range) * (height - 15.0);
+                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - display_min) / display_range) * (height - 15.0);
                     let dx = x2 - x1; let dy = y2 - y1; let len = (dx*dx + dy*dy).sqrt();
                     let ux = -dy / len; let uy = dx / len; let w = 0.8;
                     spark_vertices.push(PolyVertex { pos: [x1 + ux*w, y1 + uy*w] });
@@ -520,6 +550,7 @@ impl<'a> State<'a> {
             }
         }
         self.num_spark_vertices = spark_vertices.len() as u32;
+        self.sparkline_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (spark_vertices.len() * 8).max(8) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&self.sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
         self.num_stage_border_vertices = border_vertices.len() as u32;
         self.queue.write_buffer(&self.stage_borders_buffer, 0, bytemuck::cast_slice(&border_vertices));
@@ -555,9 +586,13 @@ impl<'a> State<'a> {
         let max_dist = self.max_dist;
         let ext_x = max_dist * 0.05;
         let delta_e_displayed = self.max_dist * self.global_max_ratio_diff;
-        let mid_ele = (self.max_ele + self.min_ele) / 2.0;
-        let mut y_min = mid_ele - delta_e_displayed / 2.0;
-        if y_min < 0.0 { y_min = 0.0; } // Don't go below sea level if not necessary
+        // Commencer à 0m si max_ele rentre dans la plage affichée
+        let y_min = if self.max_ele <= delta_e_displayed {
+            0.0
+        } else {
+            let padding = delta_e_displayed * 0.1;
+            (self.min_ele - padding).max(0.0)
+        };
         let y_max = y_min + delta_e_displayed;
         
         let ext_y = delta_e_displayed * 0.1;
@@ -589,11 +624,12 @@ impl<'a> State<'a> {
         for h in (start_h..=(y_max as i32)).step_by(step as usize) {
             let y = h as f32;
             if y < y_min { continue; }
-            add_line([-tick_len, y], [0.0, y]);
             if let Some(ref font) = self.fa {
                 let text = format!("{}m", h);
                 let (pos, uvs) = font.get_text_geometry(&text);
-                let anchor = [-tick_len * 3.0, y];
+                // Décalage fixe en coordonnées monde, cappé pour ne pas dériver au zoom
+                let offset_x = -max_dist * 0.045;
+                let anchor = [offset_x, y];
                 let size = 0.3;
                 for i in 0..(pos.len() / 2) {
                     static_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size });
@@ -635,12 +671,20 @@ impl<'a> State<'a> {
         self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&active_stage.indices)); 
         self.num_indices = active_stage.indices.len() as u32;
 
+        let delta_e_displayed = self.max_dist * self.global_max_ratio_diff;
+        let poly_y_min = if self.max_ele <= delta_e_displayed {
+            0.0
+        } else {
+            let padding = delta_e_displayed * 0.1;
+            (self.min_ele - padding).max(0.0)
+        };
+
         let mut poly_vertices = Vec::new();
         let mut poly_indices = Vec::new();
         for i in 0..self.profile_points.len() {
             let p = self.profile_points[i];
             poly_vertices.push(PolyVertex { pos: [p[0], p[1]] });
-            poly_vertices.push(PolyVertex { pos: [p[0], 0.0] }); 
+            poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min] }); 
             if i < self.profile_points.len() - 1 {
                 let b = (i * 2) as u32;
                 poly_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
@@ -712,13 +756,17 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        let graph_height = (self.size.height as f64) * 0.6;
+        let graph_height = (self.size.height as f64) * 0.8;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
-        let mid_ele = (self.max_ele + self.min_ele) / 2.0;
-        let mut y_min = mid_ele - (delta_e_displayed as f32) / 2.0;
-        if y_min < 0.0 { y_min = 0.0; }
+        // Commencer à 0m si max_ele rentre dans la plage affichée
+        let y_min = if self.max_ele <= delta_e_displayed as f32 {
+            0.0
+        } else {
+            let padding = (delta_e_displayed as f32) * 0.1;
+            (self.min_ele - padding).max(0.0)
+        };
 
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.40)) as f32;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
