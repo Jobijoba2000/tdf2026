@@ -106,8 +106,8 @@ fn fs_sidebar_bg() -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_header_bg() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.07, 0.07, 0.07, 1.0);
+fn fs_header_bg(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
 }
 
 @fragment
@@ -187,11 +187,11 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
 @group(1) @binding(1) var t_color: texture_2d<f32>;
 
 @fragment
-fn fs_text(in: TextVertexOutput) -> @location(0) vec4<f32> {
+fn fs_text_bold(in: TextVertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(textureDimensions(t_color));
     
-    // Gras : voisinage immédiat
-    let bold_off = 0.8 / tex_size;
+    // Gras : voisinage immédiat (pour le graphique)
+    let bold_off = 1.2 / tex_size;
     let a_center = textureSample(t_color, t_sampler, in.uv).a;
     let a_bold = max(a_center, max(
         max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(bold_off.x, 0.0)).a, 
@@ -200,21 +200,31 @@ fn fs_text(in: TextVertexOutput) -> @location(0) vec4<f32> {
             textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, bold_off.y)).a)
     ));
     
-    // Outline : voisinage plus large
-    let outline_off = 2.0 / tex_size;
-    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(outline_off.x, 0.0)).a;
-    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(outline_off.x, 0.0)).a;
-    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, outline_off.y)).a;
-    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, outline_off.y)).a;
-    let a_outline = max(max(a1, a2), max(a3, a4));
+    // Outline : voisinage plus large et dense
+    let outline_off = 3.2 / tex_size;
+    let o_diag = outline_off * 0.707;
+    let a_outline = max(
+        max(max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(outline_off.x, 0.0)).a, 
+                textureSample(t_color, t_sampler, in.uv - vec2<f32>(outline_off.x, 0.0)).a),
+            max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, outline_off.y)).a,
+                textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, outline_off.y)).a)),
+        max(max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(o_diag.x, o_diag.y)).a, 
+                textureSample(t_color, t_sampler, in.uv - vec2<f32>(o_diag.x, o_diag.y)).a),
+            max(textureSample(t_color, t_sampler, in.uv + vec2<f32>(o_diag.x, -o_diag.y)).a,
+                textureSample(t_color, t_sampler, in.uv - vec2<f32>(o_diag.x, -o_diag.y)).a))
+    );
     
     let final_alpha = max(a_bold, a_outline);
     if (final_alpha < 0.01) { discard; }
-    
-    // Mix entre noir (bordure) et blanc (texte gras)
     let color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_bold);
-    
     return vec4<f32>(color, final_alpha);
+}
+
+@fragment
+fn fs_text_std(in: TextVertexOutput) -> @location(0) vec4<f32> {
+    let a = textureSample(t_color, t_sampler, in.uv).a;
+    if (a < 0.01) { discard; }
+    return vec4<f32>(1.0, 1.0, 1.0, a);
 }
 
 // --- Reticule ---
