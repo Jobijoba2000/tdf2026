@@ -120,22 +120,13 @@ impl FontAtlas {
         })
     }
 
-    /// Calcule la géométrie des quads pour un texte donné (centrée à 0,0)
+    /// Calcule la géométrie des quads pour un texte donné (aligné à gauche à 0,0)
     /// Retourne (positions: Vec<[f32;2]>, uvs: Vec<[f32;2]>)
     pub fn get_text_geometry(&self, text: &str) -> (Vec<f32>, Vec<f32>) {
         let mut positions = Vec::new();
         let mut uvs = Vec::new();
 
-        // Calculer la largeur totale pour centrer
-        let mut total_advance = 0.0f32;
-        for c in text.chars() {
-            let m = self.metrics.get(&c).or_else(|| self.metrics.get(&' ')).unwrap();
-            total_advance += m.advance;
-        }
-
-        let mut cur_x = -total_advance / 2.0;
-
-        // baseline commune pour tout le mot
+        let mut cur_x = 0.0f32;
         let row_h = self.font_size * 1.4; // Hauteur totale du rang dans l'atlas
 
         for c in text.chars() {
@@ -144,7 +135,6 @@ impl FontAtlas {
                 None => continue,
             };
 
-            // On centre le quad verticalement : le milieu du row_height est à y=0
             let x0 = cur_x + m.ox;
             let x1 = x0 + (m.width as f32);
             

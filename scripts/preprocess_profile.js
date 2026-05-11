@@ -43,6 +43,21 @@ while ((match = trkRegex.exec(gpxData)) !== null) {
     const nameMatch = trkContent.match(/<name>(.*?)<\/name>/);
     const name = nameMatch ? nameMatch[1].replace('<![CDATA[', '').replace(']]>', '') : "Unknown";
     
+    const descMatch = trkContent.match(/<desc>([\s\S]*?)<\/desc>/);
+    let start = "Unknown", finish = "Unknown", date = "Unknown";
+    if (descMatch) {
+        const desc = descMatch[1].replace('<![CDATA[', '').replace(']]>', '');
+        const lines = desc.split('\n');
+        if (lines[0]) {
+            const cities = lines[0].split(' > ');
+            start = cities[0] || "Unknown";
+            finish = cities[1] || "Unknown";
+        }
+        if (lines[1]) {
+            date = lines[1];
+        }
+    }
+
     const ptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)">[\s\S]*?<ele>([^<]+)<\/ele>[\s\S]*?<\/trkpt>/g;
     let ptMatch;
     
@@ -60,92 +75,129 @@ while ((match = trkRegex.exec(gpxData)) !== null) {
     }
     
     if (points.length > 0) {
-        stages.push({ name, points });
+        stages.push({ name, start, finish, date, points });
     }
 }
 
-console.log(`Found ${stages.length} stages. Global Max Elevation: ${maxGlobalEle}m`);
+console.log(`Found ${stages.length} stages.`);
 
-// Choose a mountain stage (e.g. Stage 12, or the one with highest elevation)
-let selectedStage = stages.find(s => s.name.includes("Etape 12") || s.name.includes("Etape 11"));
-if (!selectedStage) {
-    // Fallback to the stage with the most points
-    selectedStage = stages.reduce((prev, current) => (prev.points.length > current.points.length) ? prev : current);
-}
-
-console.log(`Processing selected stage: ${selectedStage.name} (${selectedStage.points.length} points)`);
-
-// Calculate distances
-let totalDist = 0;
-let lastCoord = null;
-let profilePoints = []; // { dist, ele }
-
-for (const pt of selectedStage.points) {
-    if (lastCoord) {
-        totalDist += haversineDistance(lastCoord.lat, lastCoord.lon, pt.lat, pt.lon);
+// --- Build all stages ---
+const allStagesData = [];
+for (const stage of stages) {
+    let totalDist = 0;
+    let lastCoord = null;
+    let profilePoints = [];
+    for (const pt of stage.points) {
+        if (lastCoord) {
+            totalDist += haversineDistance(lastCoord.lat, lastCoord.lon, pt.lat, pt.lon);
+        }
+        profilePoints.push({ dist: totalDist, ele: pt.ele });
+        lastCoord = pt;
     }
-    profilePoints.push({ dist: totalDist, ele: pt.ele });
-    lastCoord = pt;
-}
 
-// Generate vertices for thick line (just like atlas-native lines)
-// Format: [x, y, prev_x, prev_y, next_x, next_y, side]
-// We generate 2 vertices per point (side 1 and -1)
-const vertices = [];
-const indices = [];
-
-let r_v_offset = 0;
-const n = profilePoints.length;
-
-for (let j = 0; j < n; j++) {
-    const p = profilePoints[j];
-    const pr = j > 0 ? profilePoints[j - 1] : p;
-    const nx = j < n - 1 ? profilePoints[j + 1] : p;
-
-    // Side 1
-    vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, 1.0);
-    // Side -1
-    vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, -1.0);
-
-    if (j < n - 1) {
-        const b = r_v_offset;
-        indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+    const vertices = [];
+    const indices = [];
+    let r_v_offset = 0;
+    const n = profilePoints.length;
+    for (let j = 0; j < n; j++) {
+        const p = profilePoints[j];
+        const pr = j > 0 ? profilePoints[j - 1] : p;
+        const nx = j < n - 1 ? profilePoints[j + 1] : p;
+        vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, 1.0);
+        vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, -1.0);
+        if (j < n - 1) {
+            const b = r_v_offset;
+            indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+        }
+        r_v_offset += 2;
     }
-    r_v_offset += 2;
+
+    // Find max elevation for THIS stage
+    const maxEle = profilePoints.reduce((max, p) => Math.max(max, p.ele), 0);
+    const minEle = profilePoints.reduce((min, p) => Math.min(min, p.ele), 9999);
+
+    // Sparkline (60 points)
+    const sparkline = new Float32Array(60);
+    for (let i = 0; i < 60; i++) {
+        const targetDist = (i / 59) * totalDist;
+        // Simple linear search (could be optimized)
+        let p = profilePoints[0];
+        for (let j = 0; j < profilePoints.length; j++) {
+            if (profilePoints[j].dist >= targetDist) {
+                p = profilePoints[j];
+                break;
+            }
+        }
+        sparkline[i] = p.ele;
+    }
+
+    allStagesData.push({
+        name: stage.name,
+        start: stage.start,
+        finish: stage.finish,
+        date: stage.date,
+        totalDist,
+        maxEle,
+        minEle,
+        sparkline,
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array(indices)
+    });
 }
 
-// Write to binary file
-// Header: 
-// - max_dist (Float32)
-// - max_ele_global (Float32)
-// - num_vertices (Uint32)
-// - num_indices (Uint32)
-// Data:
-// - vertices (Float32Array)
-// - indices (Uint32Array)
+// --- Binary Format ---
+// u32: num_stages
+// For each stage:
+//   u32: name_len, bytes: name
+//   u32: start_len, bytes: start
+//   u32: finish_len, bytes: finish
+//   u32: date_len, bytes: date
+//   f32: totalDist, f32: maxEle, f32: minEle
+//   f32[60]: sparkline
+//   u32: v_count, u32: i_count
+//   float32[]: vertices
+//   uint32[]: indices
 
-const headerSize = 16;
-const verticesSize = vertices.length * 4;
-const indicesSize = indices.length * 4;
+let totalSize = 4; // num_stages
+for (const s of allStagesData) {
+    totalSize += 4 + Buffer.from(s.name, 'utf8').length;
+    totalSize += 4 + Buffer.from(s.start, 'utf8').length;
+    totalSize += 4 + Buffer.from(s.finish, 'utf8').length;
+    totalSize += 4 + Buffer.from(s.date, 'utf8').length;
+    totalSize += 4 + 4 + 4 + (60 * 4); // dist, maxEle, minEle, sparkline
+    totalSize += 4 + 4 + s.vertices.byteLength + s.indices.byteLength;
+}
 
-const buffer = Buffer.alloc(headerSize + verticesSize + indicesSize);
+const finalBuf = Buffer.alloc(totalSize);
 let offset = 0;
 
-buffer.writeFloatLE(totalDist, offset); offset += 4;
-buffer.writeFloatLE(maxGlobalEle, offset); offset += 4;
-buffer.writeUInt32LE(vertices.length, offset); offset += 4;
-buffer.writeUInt32LE(indices.length, offset); offset += 4;
+finalBuf.writeUInt32LE(allStagesData.length, offset); offset += 4;
 
-for (const v of vertices) {
-    buffer.writeFloatLE(v, offset);
-    offset += 4;
+for (const s of allStagesData) {
+    const writeStr = (str) => {
+        const b = Buffer.from(str, 'utf8');
+        finalBuf.writeUInt32LE(b.length, offset); offset += 4;
+        b.copy(finalBuf, offset); offset += b.length;
+    };
+    writeStr(s.name);
+    writeStr(s.start);
+    writeStr(s.finish);
+    writeStr(s.date);
+    
+    finalBuf.writeFloatLE(s.totalDist, offset); offset += 4;
+    finalBuf.writeFloatLE(s.maxEle, offset); offset += 4;
+    finalBuf.writeFloatLE(s.minEle, offset); offset += 4;
+    
+    for (let i = 0; i < 60; i++) {
+        finalBuf.writeFloatLE(s.sparkline[i], offset); offset += 4;
+    }
+    
+    finalBuf.writeUInt32LE(s.vertices.length, offset); offset += 4;
+    finalBuf.writeUInt32LE(s.indices.length, offset); offset += 4;
+    
+    Buffer.from(s.vertices.buffer).copy(finalBuf, offset); offset += s.vertices.byteLength;
+    Buffer.from(s.indices.buffer).copy(finalBuf, offset); offset += s.indices.byteLength;
 }
 
-for (const i of indices) {
-    buffer.writeUInt32LE(i, offset);
-    offset += 4;
-}
-
-fs.writeFileSync(binPath, buffer);
-console.log(`Saved profile to ${binPath}`);
-console.log(`Vertices: ${vertices.length}, Indices: ${indices.length}`);
+fs.writeFileSync(binPath, finalBuf);
+console.log(`Saved ${allStagesData.length} stages to ${binPath} (Total size: ${(totalSize / 1024 / 1024).toFixed(2)} MB)`);

@@ -74,8 +74,33 @@ fn vs_poly(@location(0) pos: vec2<f32>) -> VertexOutput {
 
 @fragment
 fn fs_poly() -> @location(0) vec4<f32> {
-    // Couleur #444 plus marquée (environ 0.25 en sRGB)
-    return vec4<f32>(0.2, 0.2, 0.2, 1.0); 
+    return vec4<f32>(0.15, 0.15, 0.15, 1.0); 
+}
+
+@fragment
+fn fs_white() -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 1.0, 1.0, 1.0); 
+}
+
+@vertex
+fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
+    var out: VertexOutput;
+    out.clip_position = vec4<f32>(
+        (pos.x / uniforms.resolution.x) * 2.0 - 1.0,
+        (pos.y / uniforms.resolution.y) * 2.0 - 1.0,
+        0.0, 1.0
+    );
+    return out;
+}
+
+@fragment
+fn fs_sidebar_bg() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.1, 0.1, 0.1, 1.0);
+}
+
+@fragment
+fn fs_selected_bg() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.2, 0.2, 0.05, 0.8);
 }
 
 @fragment
@@ -116,6 +141,20 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
     var out: TextVertexOutput;
     // Anchor est déjà en pixels écran. On multiplie la taille par l'échelle relative
     let final_pos = in.anchor + vec2<f32>(in.pos.x, -in.pos.y) * in.size * uniforms._pad1;
+    out.position = vec4<f32>(
+        (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
+        (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
+        0.0, 1.0
+    );
+    out.uv = in.uv;
+    return out;
+}
+
+@vertex
+fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
+    var out: TextVertexOutput;
+    // Taille fixe pour l'UI
+    let final_pos = in.anchor + vec2<f32>(in.pos.x, -in.pos.y) * in.size;
     out.position = vec4<f32>(
         (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
         (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
