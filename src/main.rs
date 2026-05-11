@@ -447,7 +447,7 @@ impl<'a> State<'a> {
                 let x_right = 345.0;
                 
                 // --- CADRES BLANCS (Juste les cadres) ---
-                let b = 2.0; 
+                let b = 1.0; 
                 let rects = [
                     [x_left, y_top - b, x_right, y_top], // top
                     [x_left, y_top - card_h, x_right, y_top - card_h + b], // bottom
