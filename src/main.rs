@@ -471,17 +471,8 @@ impl<'a> State<'a> {
             num_header_border_vertices: 0,
         };
 
-        let rpw = (size.width as f32) - 352.0;
-        let header_w = rpw * 0.5;
-        let header_bg_data = [
-            PolyVertex { pos: [355.0, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0, size.height as f32 - 5.0] },
-            PolyVertex { pos: [355.0, size.height as f32 - 5.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 5.0] },
-        ];
-        state.queue.write_buffer(&state.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
-
         state.rebuild_ui();
-        state.update_axes();
-        state.select_stage(0);
+        state.select_stage(selected_stage_idx);
 
         state
     }
@@ -630,9 +621,49 @@ impl<'a> State<'a> {
             ]);
         }
         self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
-        self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
 
-        self.select_stage(self.selected_stage_idx);
+        // Mise à jour de la sélection dans la sidebar (doit suivre le scroll)
+        let y_top_sel = size.height as f32 - 40.0 - (self.selected_stage_idx as f32 * 260.0) + self.sidebar_scroll_y;
+        let sel_data = [
+            PolyVertex { pos: [0.0, y_top_sel - 230.0] }, PolyVertex { pos: [350.0, y_top_sel - 230.0] }, PolyVertex { pos: [0.0, y_top_sel] },
+            PolyVertex { pos: [0.0, y_top_sel] }, PolyVertex { pos: [350.0, y_top_sel - 230.0] }, PolyVertex { pos: [350.0, y_top_sel] },
+        ];
+        self.queue.write_buffer(&self.selected_bg_buffer, 0, bytemuck::cast_slice(&sel_data));
+
+        // Header Background
+        let rpw = (size.width as f32) - 352.0;
+        let header_w = rpw * 0.5;
+        let header_bg_data = [
+            PolyVertex { pos: [355.0, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0, size.height as f32 - 5.0] },
+            PolyVertex { pos: [355.0, size.height as f32 - 5.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 145.0] }, PolyVertex { pos: [355.0 + header_w, size.height as f32 - 5.0] },
+        ];
+        self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
+
+        // Mise à jour du texte du header
+        let mut header_text_vertices = Vec::new();
+        if let Some(ref font) = self.fa {
+            let stage = &self.stages[self.selected_stage_idx];
+            let line1 = format!("Etape {}", self.selected_stage_idx + 1);
+            let (pos, uvs) = font.get_text_geometry(&line1);
+            let anchor1 = [370.0, self.size.height as f32 - 55.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor1, size: 1.1 });
+            }
+            let line2 = format!("{} > {}", stage.start, stage.finish);
+            let (pos, uvs) = font.get_text_geometry(&line2);
+            let anchor2 = [370.0, self.size.height as f32 - 100.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor2, size: 0.55 });
+            }
+            let line3 = format!("{:.1} km", stage.max_dist / 1000.0);
+            let (pos, uvs) = font.get_text_geometry(&line3);
+            let anchor3 = [370.0, self.size.height as f32 - 130.0];
+            for i in 0..(pos.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor3, size: 0.4 });
+            }
+        }
+        self.num_header_text_vertices = header_text_vertices.len() as u32;
+        self.queue.write_buffer(&self.header_text_buffer, 0, bytemuck::cast_slice(&header_text_vertices));
     }
 
     fn update_axes(&mut self) {
@@ -707,12 +738,6 @@ impl<'a> State<'a> {
         self.selected_stage_idx = idx;
         let active_stage = &self.stages[idx];
         
-        // Extract data for header
-        let _stage_name = active_stage.name.clone();
-        let stage_start = active_stage.start.clone();
-        let stage_finish = active_stage.finish.clone();
-        let stage_dist = active_stage.max_dist;
-
         self.max_dist = active_stage.max_dist;
         self.max_ele = active_stage.max_ele;
         self.min_ele = active_stage.min_ele;
@@ -763,54 +788,17 @@ impl<'a> State<'a> {
         self.queue.write_buffer(&self.poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices)); 
         self.num_poly_indices = poly_indices.len() as u32;
 
-        let y_top = self.size.height as f32 - 40.0 - (idx as f32 * 260.0) + self.sidebar_scroll_y;
-        let sel_data = [
-            PolyVertex { pos: [0.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [0.0, y_top] },
-            PolyVertex { pos: [0.0, y_top] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top] },
-        ];
-
-        self.queue.write_buffer(&self.selected_bg_buffer, 0, bytemuck::cast_slice(&sel_data));
-
         self.update_axes();
  
-        // Header text (3 lines)
-        let mut header_text_vertices = Vec::new();
-        if let Some(ref font) = self.fa {
-            // Line 1: Etape N
-            let line1 = format!("Etape {}", idx + 1);
-            let (pos, uvs) = font.get_text_geometry(&line1);
-            let anchor1 = [370.0, self.size.height as f32 - 55.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor1, size: 1.1 });
-            }
-            
-            // Line 2: Start > Finish
-            let line2 = format!("{} > {}", stage_start, stage_finish);
-            let (pos, uvs) = font.get_text_geometry(&line2);
-            let anchor2 = [370.0, self.size.height as f32 - 100.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor2, size: 0.55 });
-            }
-
-            // Line 3: Distance
-            let line3 = format!("{:.1} km", stage_dist / 1000.0);
-            let (pos, uvs) = font.get_text_geometry(&line3);
-            let anchor3 = [370.0, self.size.height as f32 - 130.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor3, size: 0.4 });
-            }
-        }
-        self.num_header_text_vertices = header_text_vertices.len() as u32;
-        self.queue.write_buffer(&self.header_text_buffer, 0, bytemuck::cast_slice(&header_text_vertices));
-
+        // Reset View
         let rpw = (self.size.width as f64) - 350.0;
         let graph_width = rpw * 0.8;
         let margin_x = 350.0 + rpw * 0.1;
-        let _graph_height = (self.size.height as f64 - 260.0) * 0.5;
         self.initial_scale = graph_width / (self.max_dist as f64);
         self.pos_scale = self.initial_scale;
         self.pos_translate = [margin_x, (self.size.height as f64 - 260.0) * 0.2];
-
+        
+        self.rebuild_ui();
     }
 
     fn update(&mut self) {
@@ -875,6 +863,7 @@ impl<'a> State<'a> {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
             self.rebuild_ui();
+            self.select_stage(self.selected_stage_idx);
         }
     }
 
