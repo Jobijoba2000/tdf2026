@@ -101,6 +101,11 @@ struct State<'a> {
     num_poly_indices: u32,
     num_axes_indices: u32,
     num_static_text_vertices: u32,
+    num_stage_border_vertices: u32,
+    num_spark_vertices: u32,
+    
+    global_max_dist: f32,
+    global_max_ele: f32,
     
     stages: Vec<Stage>,
     selected_stage_idx: usize,
@@ -126,6 +131,7 @@ struct State<'a> {
     selected_bg_buffer: wgpu::Buffer,
     hover_bg_buffer: wgpu::Buffer,
     sparkline_buffer: wgpu::Buffer,
+    stage_borders_buffer: wgpu::Buffer,
     ui_render_pipeline: wgpu::RenderPipeline,
     selected_render_pipeline: wgpu::RenderPipeline,
     hover_render_pipeline: wgpu::RenderPipeline,
@@ -303,22 +309,20 @@ impl<'a> State<'a> {
                 let (pos, uvs) = font.get_text_geometry(&date_txt);
                 let anchor = [80.0, y_top - 65.0];
                 for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.25 });
                 }
             }
-
-
         }
 
+        let sidebar_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let sidebar_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (sidebar_text_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        queue.write_buffer(&sidebar_text_buffer, 0, bytemuck::cast_slice(&sidebar_text_vertices));
+        let axes_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let axes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let axes_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let axes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 128, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { layout: &uniform_bind_group_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() }], label: None });
         let atlas_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None }, wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None }] });
@@ -342,7 +346,7 @@ impl<'a> State<'a> {
 
         let reticule_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_reticule", buffers: &[] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_reticule", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let dot_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_dot", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_dot", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 96, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let sidebar_bg_data = [
             PolyVertex { pos: [0.0, 0.0] }, PolyVertex { pos: [500.0, 0.0] }, PolyVertex { pos: [0.0, size.height as f32] },
             PolyVertex { pos: [0.0, size.height as f32] }, PolyVertex { pos: [500.0, 0.0] }, PolyVertex { pos: [500.0, size.height as f32] },
@@ -400,14 +404,19 @@ impl<'a> State<'a> {
         let sparkline_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (spark_vertices.len() * 8) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         queue.write_buffer(&sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
 
+        let global_max_dist = stages.iter().map(|s| s.max_dist).fold(0.0, f32::max);
+        let global_max_ele = stages.iter().map(|s| s.max_ele).fold(0.0, f32::max);
+
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_screen_pipeline, text_ui_pipeline, reticule_render_pipeline, dot_render_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline,
-            sidebar_bg_buffer, selected_bg_buffer, hover_bg_buffer, sparkline_buffer,
+            sidebar_bg_buffer, selected_bg_buffer, hover_bg_buffer, sparkline_buffer, stage_borders_buffer,
             hover_stage_idx: None,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
-            num_indices: active_stage.indices.len() as u32, num_poly_indices: poly_indices.len() as u32, num_axes_indices: 0, num_static_text_vertices: 0,
+            num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_static_text_vertices: 0,
+            num_stage_border_vertices: 0, num_spark_vertices: 0,
+            global_max_dist, global_max_ele,
             stages, selected_stage_idx, sidebar_text_buffer, num_sidebar_text_vertices: 0,
             max_dist, max_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None, fa,
@@ -425,44 +434,91 @@ impl<'a> State<'a> {
     fn rebuild_ui(&mut self) {
         let size = self.size;
         let scroll = self.sidebar_scroll_y;
-        let margin = 35.0; // Notre "CSS margin-left"
+        let margin_side = 5.0;
         let mut sidebar_text_vertices = Vec::new();
+        let mut spark_vertices = Vec::new();
+        let mut border_vertices = Vec::new();
+
         if let Some(ref font) = self.fa {
-            let title = "TOUR DE FRANCE 2026";
-            let (pos, uvs) = font.get_text_geometry(title);
-            let anchor = [margin, size.height as f32 - 35.0 + scroll];
-            for i in 0..(pos.len() / 2) {
-                sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 });
-            }
-
             for (idx, stage) in self.stages.iter().enumerate() {
-                let y_top = size.height as f32 - 60.0 - (idx as f32 * 135.0) + scroll;
-                let anchor_x = margin;
+                let y_top = size.height as f32 - 40.0 - (idx as f32 * 260.0) + scroll;
+                let card_h = 230.0;
+                let x_left = margin_side;
+                let x_right = 345.0;
                 
-                let name_txt = format!("{}. {}", idx + 1, stage.name);
-                let (pos, uvs) = font.get_text_geometry(&name_txt);
-                let a = [anchor_x, y_top - 20.0];
-                for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: a, size: 0.4 });
+                // --- CADRES BLANCS (Juste les cadres) ---
+                let b = 2.0; 
+                let rects = [
+                    [x_left, y_top - b, x_right, y_top], // top
+                    [x_left, y_top - card_h, x_right, y_top - card_h + b], // bottom
+                    [x_left, y_top - card_h, x_left + b, y_top], // left
+                    [x_right - b, y_top - card_h, x_right, y_top], // right
+                ];
+                for r in rects {
+                    border_vertices.push(PolyVertex { pos: [r[0], r[1]] });
+                    border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
+                    border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
+                    border_vertices.push(PolyVertex { pos: [r[0], r[3]] });
+                    border_vertices.push(PolyVertex { pos: [r[2], r[1]] });
+                    border_vertices.push(PolyVertex { pos: [r[2], r[3]] });
                 }
 
-                let cities_txt = format!("{} > {}", stage.start, stage.finish);
-                let (pos, uvs) = font.get_text_geometry(&cities_txt);
-                let a = [anchor_x, y_top - 45.0];
+                // --- CONTENU RESTAURÉ ---
+                let x_start = x_left + 15.0;
+                
+                // 1. Nom de l'étape
+                let title = format!("{}. {}", idx + 1, stage.name);
+                let (pos, uvs) = font.get_text_geometry(&title);
+                let anchor = [x_start, y_top - 25.0];
                 for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: a, size: 0.25 });
+                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.4 });
                 }
 
-                let date_txt = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
-                let (pos, uvs) = font.get_text_geometry(&date_txt);
-                let a = [anchor_x, y_top - 65.0];
+                // 2. Villes (Départ > Arrivée)
+                let cities = format!("{} > {}", stage.start, stage.finish);
+                let (pos, uvs) = font.get_text_geometry(&cities);
+                let anchor_c = [x_start, y_top - 50.0];
                 for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: a, size: 0.25 });
+                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_c, size: 0.25 });
+                }
+
+                // 3. Date | Distance
+                let info = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
+                let (pos, uvs) = font.get_text_geometry(&info);
+                let anchor_i = [x_start, y_top - 70.0];
+                for i in 0..(pos.len() / 2) {
+                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_i, size: 0.25 });
+                }
+
+                // 4. Sparklines (Profil simplifié)
+                let y_base = y_top - 200.0;
+                let width = 310.0; // Largeur fixe pour toutes les étapes
+                let height = 65.0;
+                let min = stage.min_ele;
+                let max = stage.max_ele;
+                let range = (max - min).max(1.0);
+                
+                for j in 0..59 {
+                    let x1 = x_start + (j as f32 / 59.0) * width;
+                    let x2 = x_start + ((j+1) as f32 / 59.0) * width;
+                    let y1 = y_base + 10.0 + ((stage.sparkline[j] - min) / range) * (height - 15.0);
+                    let y2 = y_base + 10.0 + ((stage.sparkline[j+1] - min) / range) * (height - 15.0);
+                    let dx = x2 - x1; let dy = y2 - y1; let len = (dx*dx + dy*dy).sqrt();
+                    let ux = -dy / len; let uy = dx / len; let w = 0.8;
+                    spark_vertices.push(PolyVertex { pos: [x1 + ux*w, y1 + uy*w] });
+                    spark_vertices.push(PolyVertex { pos: [x1 - ux*w, y1 - uy*w] });
+                    spark_vertices.push(PolyVertex { pos: [x2 + ux*w, y2 + uy*w] });
+                    spark_vertices.push(PolyVertex { pos: [x2 + ux*w, y2 + uy*w] });
+                    spark_vertices.push(PolyVertex { pos: [x1 - ux*w, y1 - uy*w] });
+                    spark_vertices.push(PolyVertex { pos: [x2 - ux*w, y2 - uy*w] });
                 }
             }
         }
+        self.num_spark_vertices = spark_vertices.len() as u32;
+        self.queue.write_buffer(&self.sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
+        self.num_stage_border_vertices = border_vertices.len() as u32;
+        self.queue.write_buffer(&self.stage_borders_buffer, 0, bytemuck::cast_slice(&border_vertices));
         self.num_sidebar_text_vertices = sidebar_text_vertices.len() as u32;
-        self.sidebar_text_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (sidebar_text_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&self.sidebar_text_buffer, 0, bytemuck::cast_slice(&sidebar_text_vertices));
 
         // Background + Scrollbar handle
@@ -472,9 +528,7 @@ impl<'a> State<'a> {
             PolyVertex { pos: [350.0, 0.0] }, PolyVertex { pos: [352.0, 0.0] }, PolyVertex { pos: [350.0, size.height as f32] },
             PolyVertex { pos: [350.0, size.height as f32] }, PolyVertex { pos: [352.0, 0.0] }, PolyVertex { pos: [352.0, size.height as f32] },
         ];
-
-        // Visual Scrollbar Handle
-        let total_h = self.stages.len() as f32 * 135.0;
+        let total_h = self.stages.len() as f32 * 260.0;
         let view_h = size.height as f32 - 100.0;
         if total_h > view_h {
             let handle_h = (view_h / total_h) * view_h;
@@ -486,37 +540,7 @@ impl<'a> State<'a> {
                 PolyVertex { pos: [345.0, y0] }, PolyVertex { pos: [348.0, y1] }, PolyVertex { pos: [348.0, y0] },
             ]);
         }
-
-        self.sidebar_bg_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (sidebar_bg_data.len() * 8) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&self.sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
-
-        let mut spark_vertices = Vec::new();
-        for (idx, stage) in self.stages.iter().enumerate() {
-            let y_base = size.height as f32 - 60.0 - (idx as f32 * 135.0) - 125.0 + scroll;
-            let x_start = margin;
-            let width = 250.0;
-            let height = 45.0;
-            let min = stage.min_ele;
-            let max = stage.max_ele;
-            let range = (max - min).max(1.0);
-            for j in 0..59 {
-                let x1 = x_start + (j as f32 / 59.0) * width;
-                let x2 = x_start + ((j+1) as f32 / 59.0) * width;
-                let y1 = y_base + ((stage.sparkline[j] - min) / range) * height;
-                let y2 = y_base + ((stage.sparkline[j+1] - min) / range) * height;
-                let dx = x2 - x1; let dy = y2 - y1; let len = (dx*dx + dy*dy).sqrt();
-                let ux = -dy / len; let uy = dx / len; let w = 1.0;
-                spark_vertices.push(PolyVertex { pos: [x1 + ux*w, y1 + uy*w] });
-                spark_vertices.push(PolyVertex { pos: [x1 - ux*w, y1 - uy*w] });
-                spark_vertices.push(PolyVertex { pos: [x2 + ux*w, y2 + uy*w] });
-                spark_vertices.push(PolyVertex { pos: [x1 - ux*w, y1 - uy*w] });
-                spark_vertices.push(PolyVertex { pos: [x2 - ux*w, y2 - uy*w] });
-                spark_vertices.push(PolyVertex { pos: [x2 + ux*w, y2 + uy*w] });
-            }
-        }
-        self.sparkline_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (spark_vertices.len() * 8) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        self.queue.write_buffer(&self.sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
-        
         self.select_stage(self.selected_stage_idx);
     }
 
@@ -612,10 +636,10 @@ impl<'a> State<'a> {
         self.queue.write_buffer(&self.poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices)); 
         self.num_poly_indices = poly_indices.len() as u32;
 
-        let y_top = self.size.height as f32 - 60.0 - (idx as f32 * 135.0) + self.sidebar_scroll_y;
+        let y_top = self.size.height as f32 - 40.0 - (idx as f32 * 260.0) + self.sidebar_scroll_y;
         let sel_data = [
-            PolyVertex { pos: [0.0, y_top - 135.0] }, PolyVertex { pos: [350.0, y_top - 135.0] }, PolyVertex { pos: [0.0, y_top] },
-            PolyVertex { pos: [0.0, y_top] }, PolyVertex { pos: [350.0, y_top - 135.0] }, PolyVertex { pos: [350.0, y_top] },
+            PolyVertex { pos: [0.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [0.0, y_top] },
+            PolyVertex { pos: [0.0, y_top] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top] },
         ];
 
         self.queue.write_buffer(&self.selected_bg_buffer, 0, bytemuck::cast_slice(&sel_data));
@@ -731,34 +755,39 @@ impl<'a> State<'a> {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None });
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             
-            // Draw sidebar (no clipping)
+            // 1. Sidebar Background
             pass.set_pipeline(&self.ui_render_pipeline);
             pass.set_vertex_buffer(0, self.sidebar_bg_buffer.slice(..));
-            let num_bg = if self.stages.len() as f32 * 135.0 > self.size.height as f32 - 100.0 { 18 } else { 12 };
-            pass.draw(0..num_bg, 0..1); // BG + Border
+            let num_bg = if self.stages.len() as f32 * 260.0 > self.size.height as f32 - 100.0 { 18 } else { 12 };
+            pass.draw(0..num_bg, 0..1); 
             
+            // 2. Selection Highlight
             pass.set_pipeline(&self.selected_render_pipeline);
             pass.set_vertex_buffer(0, self.selected_bg_buffer.slice(..));
             pass.draw(0..6, 0..1);
 
-            // Hover
+            // 3. Hover Highlight
             if let Some(idx) = self.hover_stage_idx {
-                let y_top = self.size.height as f32 - 60.0 - (idx as f32 * 135.0) + self.sidebar_scroll_y;
+                let y_top = self.size.height as f32 - 40.0 - (idx as f32 * 260.0) + self.sidebar_scroll_y;
                 let hover_data = [
-                    PolyVertex { pos: [0.0, y_top - 135.0] }, PolyVertex { pos: [350.0, y_top - 135.0] }, PolyVertex { pos: [0.0, y_top] },
-                    PolyVertex { pos: [0.0, y_top] }, PolyVertex { pos: [350.0, y_top - 135.0] }, PolyVertex { pos: [350.0, y_top] },
+                    PolyVertex { pos: [0.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [0.0, y_top] },
+                    PolyVertex { pos: [0.0, y_top] }, PolyVertex { pos: [350.0, y_top - 230.0] }, PolyVertex { pos: [350.0, y_top] },
                 ];
-
-
                 self.queue.write_buffer(&self.hover_bg_buffer, 0, bytemuck::cast_slice(&hover_data));
                 pass.set_pipeline(&self.hover_render_pipeline);
                 pass.set_vertex_buffer(0, self.hover_bg_buffer.slice(..));
                 pass.draw(0..6, 0..1);
             }
 
+            // 4. CADRES BLANCS (White Outlines)
+            pass.set_pipeline(&self.sparkline_render_pipeline); // fs_white
+            pass.set_vertex_buffer(0, self.stage_borders_buffer.slice(..));
+            pass.draw(0..self.num_stage_border_vertices, 0..1);
+
+            // 5. Sparklines
             pass.set_pipeline(&self.sparkline_render_pipeline);
             pass.set_vertex_buffer(0, self.sparkline_buffer.slice(..));
-            pass.draw(0..(self.stages.len() as u32 * 59 * 6), 0..1);
+            pass.draw(0..self.num_spark_vertices, 0..1);
 
             if let Some(ref bg) = self.atlas_bind_group {
                 pass.set_pipeline(&self.text_ui_pipeline); 
