@@ -698,13 +698,6 @@ impl<'a> State<'a> {
                 border_vertices.push(PolyVertex::new([r[2], r[3], 0.0, 0.0], 0.0));
             }
             
-            // Button background if selected
-            if is_selected {
-                header_bg_data.extend_from_slice(&[
-                    PolyVertex::new([bx, btn_y - btn_h, 0.0, 0.0], 0.0), PolyVertex::new([bx + btn_w, btn_y - btn_h, 0.0, 0.0], 0.0), PolyVertex::new([bx, btn_y, 0.0, 0.0], 0.0),
-                    PolyVertex::new([bx, btn_y, 0.0, 0.0], 0.0), PolyVertex::new([bx + btn_w, btn_y - btn_h, 0.0, 0.0], 0.0), PolyVertex::new([bx + btn_w, btn_y, 0.0, 0.0], 0.0),
-                ]);
-            }
         }
 
         self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
@@ -738,22 +731,12 @@ impl<'a> State<'a> {
                 header_text_vertices.push(TextVertex { pos: [pos3[i*2], pos3[i*2+1]], uv: [uvs3[i*2], uvs3[i*2+1]], anchor: anchor3, size: 0.48 });
             }
 
-            // Boutons "Profil" et "Tracé"
-            let btn_w = 120.0;
-            let btn_gap = 10.0;
-            let btn_x_start = self.size.width as f32 - (btn_w * 2.0 + btn_gap + 20.0);
-            let btn_y = self.size.height as f32 - 60.0;
-
-            let labels = ["Profil", "Trace"];
-            for i in 0..2 {
-                let bx = btn_x_start + (i as f32 * (btn_w + btn_gap));
-                let (pos_btn, uvs_btn): (Vec<f32>, Vec<f32>) = font.get_text_geometry(labels[i]);
-                // Centrage du texte dans le bouton
-                let text_w = font.compute_label_size(labels[i], 1.0) * 0.4 * 50.0; // Approximation
-                let anchor = [bx + (btn_w - text_w) * 0.5, btn_y - 32.0];
-                for j in 0..(pos_btn.len() / 2) {
-                    header_text_vertices.push(TextVertex { pos: [pos_btn[j*2], pos_btn[j*2+1]], uv: [uvs_btn[j*2], uvs_btn[j*2+1]], anchor, size: 0.4 });
-                }
+            // Aide contextuelle en haut à droite
+            let help_text = if self.view_mode == 0 { "[T] Voir le tracé 3D" } else { "[T] Retour au profil 2D" };
+            let (pos_h, uvs_h): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_text);
+            let anchor_h = [self.size.width as f32 - 250.0, self.size.height as f32 - 45.0];
+            for i in 0..(pos_h.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos_h[i*2], pos_h[i*2+1]], uv: [uvs_h[i*2], uvs_h[i*2+1]], anchor: anchor_h, size: 0.4 });
             }
         }
         self.num_header_text_vertices = header_text_vertices.len() as u32;
@@ -1312,13 +1295,13 @@ fn main() {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
                     Key::Character(c) if c == "t" || c == "T" => {
-                        state.view_mode = 1;
-                        state.target_morph = 1.0;
-                        state.rebuild_ui();
-                    }
-                    Key::Character(c) if c == "p" || c == "P" => {
-                        state.view_mode = 0;
-                        state.target_morph = 0.0;
+                        if state.view_mode == 0 {
+                            state.view_mode = 1;
+                            state.target_morph = 1.0;
+                        } else {
+                            state.view_mode = 0;
+                            state.target_morph = 0.0;
+                        }
                         state.rebuild_ui();
                     }
                     _ => {}
@@ -1373,24 +1356,6 @@ fn main() {
                             state.select_stage(idx as usize);
                             state.slope_start = None;
                             state.slope_result = None;
-                        }
-                    }
-
-                    // Check Header Buttons (TOP-RIGHT area) - WIDENED ZONE
-                    let mouse_y = state.mouse_pos[1];
-                    let mouse_x = state.mouse_pos[0];
-                    
-                    if mouse_y < 150.0 && mouse_x > state.size.width as f32 - 400.0 {
-                        let btn_w = 120.0;
-                        let btn_gap = 10.0;
-                        let btn_x_start = state.size.width as f32 - (btn_w * 2.0 + btn_gap + 40.0);
-                        for i in 0..2 {
-                            let bx = btn_x_start + (i as f32 * (btn_w + btn_gap));
-                            if mouse_x >= bx && mouse_x <= bx + btn_w + 20.0 {
-                                state.view_mode = i as u32;
-                                state.target_morph = if i == 0 { 0.0 } else { 1.0 };
-                                state.rebuild_ui();
-                            }
                         }
                     }
                 } else if *button == MouseButton::Right && *s == ElementState::Pressed {
