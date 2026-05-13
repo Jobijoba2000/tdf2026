@@ -62,10 +62,10 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     let screen_pos_2d = p2d + normal * model.side * uniforms.thickness;
     let clip_2d = vec4<f32>((screen_pos_2d / uniforms.resolution) * 2.0 - 1.0, 0.5, 1.0);
 
-    // Position 3D (Trace)
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch + 2.0, 1.0);
-    let prev_world = vec4<f32>(model.prev.z, model.prev.w, model.prev.y * uniforms.y_stretch + 2.0, 1.0);
-    let next_world = vec4<f32>(model.next.z, model.next.w, model.next.y * uniforms.y_stretch + 2.0, 1.0);
+    // Position 3D (Trace) - Reduced exaggeration (0.5x) + Tiny offset to avoid Z-fighting
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    let prev_world = vec4<f32>(model.prev.z, model.prev.w, model.prev.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    let next_world = vec4<f32>(model.next.z, model.next.w, model.next.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
     
     let p3d_clip = uniforms.view_proj * world_pos;
     let prev3d_clip = uniforms.view_proj * prev_world;
@@ -94,11 +94,11 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     var out: VertexOutput;
     
     // Position 2D
-    let p2d_scr = project_2d(model.pos.z, model.pos.w); // lx, ly -> screen
+    let p2d_scr = project_2d(model.pos.x, model.pos.y); // Use distance, elevation for 2D profile
     let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, 0.51, 1.0);
 
-    // Position 3D
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch, 1.0);
+    // Position 3D - Reduced exaggeration (0.5x)
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5, 1.0);
     let clip_3d = uniforms.view_proj * world_pos;
 
     out.clip_position = mix(clip_2d, clip_3d, uniforms.morph);
@@ -217,17 +217,64 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
 @group(1) @binding(1) var t_color: texture_2d<f32>;
 
 @fragment
+fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
+    let a_center = textureSample(t_color, t_sampler, in.uv).a;
+    let size = vec2<f32>(textureDimensions(t_color, 0));
+    let offset = 2.5 / size; 
+    
+    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
+    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
+    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, offset.y)).a;
+    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, offset.y)).a;
+    let a5 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, offset.y)).a;
+    let a6 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, offset.y)).a;
+    let a7 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, -offset.y)).a;
+    let a8 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, -offset.y)).a;
+    let outline = max(max(max(a1, a2), max(a3, a4)), max(max(a5, a6), max(a7, a8)));
+
+    if (outline < 0.01 && a_center < 0.01) { discard; }
+    
+    // Simuler du gras
+    let bold_a = smoothstep(0.2, 0.5, a_center);
+    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), bold_a);
+    return vec4<f32>(final_color, max(bold_a, outline));
+}
+
+@fragment
 fn fs_text_bold(in: TextVertexOutput) -> @location(0) vec4<f32> {
     let a_center = textureSample(t_color, t_sampler, in.uv).a;
-    if (a_center < 0.01) { discard; }
-    return vec4<f32>(1.0, 1.0, 1.0, a_center);
+    
+    // Contour noir par échantillonnage des voisins
+    let size = vec2<f32>(textureDimensions(t_color, 0));
+    let offset = 1.5 / size;
+    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
+    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
+    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, offset.y)).a;
+    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, offset.y)).a;
+    let outline = max(max(a1, a2), max(a3, a4));
+
+    if (outline < 0.01 && a_center < 0.01) { discard; }
+    
+    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_center);
+    return vec4<f32>(final_color, max(a_center, outline * 0.8));
 }
 
 @fragment
 fn fs_text_std(in: TextVertexOutput) -> @location(0) vec4<f32> {
-    let a = textureSample(t_color, t_sampler, in.uv).a;
-    if (a < 0.01) { discard; }
-    return vec4<f32>(1.0, 1.0, 1.0, a);
+    let a_center = textureSample(t_color, t_sampler, in.uv).a;
+    
+    let size = vec2<f32>(textureDimensions(t_color, 0));
+    let offset = 1.2 / size;
+    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
+    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
+    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, offset.y)).a;
+    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, offset.y)).a;
+    let outline = max(max(a1, a2), max(a3, a4));
+
+    if (outline < 0.01 && a_center < 0.01) { discard; }
+    
+    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_center);
+    return vec4<f32>(final_color, max(a_center, outline * 0.7));
 }
 
 struct ReticuleOutput {
