@@ -3,6 +3,7 @@ mod font_atlas;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use crate::font_atlas::FontAtlas;
 use winit::{
     event::*,
     event_loop::EventLoop,
@@ -24,12 +25,13 @@ struct Vertex {
 struct PolyVertex {
     pos: [f32; 4], // x, y, lx, ly
     side: f32,     // 1.0 for top, 0.0 for bottom
-    _pad: [f32; 3], // Pad to 32 bytes (aligned)
+    flag: f32,
+    _pad: [f32; 2], // Pad to 32 bytes (aligned)
 }
 
 impl PolyVertex {
     fn new(pos: [f32; 4], side: f32) -> Self {
-        Self { pos, side, _pad: [0.0; 3] }
+        Self { pos, side, flag: 0.0, _pad: [0.0; 2] }
     }
 }
 
@@ -45,23 +47,21 @@ struct TextVertex {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Pod, Zeroable)]
 struct Uniforms {
-    translate: [f32; 2],     // 0-8
-    scale: f32,              // 8-12
-    thickness: f32,          // 12-16
-    resolution: [f32; 2],    // 16-24
-    y_stretch: f32,          // 24-28
-    morph: f32,              // 28-32
-    color: [f32; 4],         // 32-48
-    mouse_pos: [f32; 2],     // 48-56
-    raw_mouse_x: f32,        // 56-60
-    max_dist: f32,           // 60-64
-    y_min: f32,              // 64-68
-    y_max: f32,              // 68-72
-    camera_angle: [f32; 2],  // 72-80 [tilt, heading]
-    camera_offset: [f32; 2], // 80-88
-    stage_center: [f32; 2],  // 88-96
-    rel_scale: f32,          // 96-100
-    _pad: [f32; 3],          // 100-112 (Pad to 16-byte boundary)
+    view_proj: glam::Mat4,   // 0-64
+    translate: [f32; 2],     // 64-72
+    scale: f32,              // 72-76
+    thickness: f32,          // 76-80
+    resolution: [f32; 2],    // 80-88
+    y_stretch: f32,          // 88-92
+    morph: f32,              // 92-96
+    color: [f32; 4],         // 96-112
+    mouse_pos: [f32; 2],     // 112-120
+    raw_mouse_x: f32,        // 120-124
+    max_dist: f32,           // 124-128
+    y_min: f32,              // 128-132
+    y_max: f32,              // 132-136
+    rel_scale: f32,          // 136-140
+    _pad: [f32; 1],          // 140-144
 }
 
 struct ZoomAnimation {
@@ -95,6 +95,12 @@ struct Stage {
     profile_points: Vec<[f32; 2]>,
 }
 
+struct MorphAnimation {
+    start_time: Instant,
+    duration: Duration,
+    start_morph: f32,
+    target_morph: f32,
+}
 
 struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -104,99 +110,98 @@ struct State<'a> {
     size: winit::dpi::PhysicalSize<u32>,
     window: Arc<winit::window::Window>,
 
+    // Pipelines
     render_pipeline: wgpu::RenderPipeline,
     poly_render_pipeline: wgpu::RenderPipeline,
     text_render_pipeline: wgpu::RenderPipeline,
-    text_screen_pipeline: wgpu::RenderPipeline,
     text_ui_pipeline: wgpu::RenderPipeline,
+    text_screen_pipeline: wgpu::RenderPipeline,
+    ui_render_pipeline: wgpu::RenderPipeline,
+    selected_render_pipeline: wgpu::RenderPipeline,
+    hover_render_pipeline: wgpu::RenderPipeline,
+    sparkline_render_pipeline: wgpu::RenderPipeline,
     reticule_render_pipeline: wgpu::RenderPipeline,
-
     dot_render_pipeline: wgpu::RenderPipeline,
-    ground_render_pipeline: wgpu::RenderPipeline,
+    header_render_pipeline: wgpu::RenderPipeline,
+
+    // Buffers & Resources
+    uniform_bind_group: wgpu::BindGroup,
+    atlas_bind_group: Option<wgpu::BindGroup>,
+    uniform_buffer: wgpu::Buffer,
+    depth_texture: wgpu::TextureView,
 
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     poly_vertex_buffer: wgpu::Buffer,
     poly_index_buffer: wgpu::Buffer,
-    ground_vertex_buffer: wgpu::Buffer,
-    ground_line_buffer: wgpu::Buffer,
-    ground_line_index_buffer: wgpu::Buffer,
     axes_vertex_buffer: wgpu::Buffer,
     axes_index_buffer: wgpu::Buffer,
     static_text_buffer: wgpu::Buffer,
+    
+    sidebar_bg_buffer: wgpu::Buffer,
+    sidebar_text_buffer: wgpu::Buffer,
+    sparkline_buffer: wgpu::Buffer,
+    stage_borders_buffer: wgpu::Buffer,
+    selected_bg_buffer: wgpu::Buffer,
+    hover_bg_buffer: wgpu::Buffer,
+    header_text_buffer: wgpu::Buffer,
+    header_bg_buffer: wgpu::Buffer,
+    header_border_buffer: wgpu::Buffer,
 
+    // Metadata
     num_indices: u32,
     num_poly_indices: u32,
     num_axes_indices: u32,
+    num_axes_vertices: u32,
     num_static_text_vertices: u32,
-    num_ground_vertices: u32,
-    num_ground_line_indices: u32,
     num_stage_border_vertices: u32,
     num_spark_vertices: u32,
-    
+    num_sidebar_text_vertices: u32,
+    num_header_text_vertices: u32,
+    num_header_border_vertices: u32,
+
+    // State
+    profile_points: Vec<[f32; 2]>,
+    max_dist: f32,
+    min_ele: f32,
+    max_ele: f32,
     global_max_dist: f32,
     global_max_ele: f32,
     global_max_ratio_diff: f32,
     
-    stages: Vec<Stage>,
-    selected_stage_idx: usize,
-    sidebar_text_buffer: wgpu::Buffer,
-    num_sidebar_text_vertices: u32,
+    mouse_pos: [f32; 2],
+    mouse_pressed: bool,
+    last_mouse_pos: [f32; 2],
     
-    max_dist: f32,
-    max_ele: f32,
-    min_ele: f32,
-    profile_points: Vec<[f32; 2]>,
-
     pos_translate: [f64; 2],
     pos_scale: f64,
     initial_scale: f64,
-    mouse_pos: [f32; 2],
-    mouse_pressed: bool,
-    last_mouse_pos: [f64; 2],
-
-    uniform_buffer: wgpu::Buffer,
-    uniform_bind_group: wgpu::BindGroup,
-    atlas_bind_group: Option<wgpu::BindGroup>,
-    
-    sidebar_bg_buffer: wgpu::Buffer,
-    selected_bg_buffer: wgpu::Buffer,
-    hover_bg_buffer: wgpu::Buffer,
-    sparkline_buffer: wgpu::Buffer,
-    stage_borders_buffer: wgpu::Buffer,
-    ui_render_pipeline: wgpu::RenderPipeline,
-    selected_render_pipeline: wgpu::RenderPipeline,
-    hover_render_pipeline: wgpu::RenderPipeline,
-    sparkline_render_pipeline: wgpu::RenderPipeline,
-    
-    hover_stage_idx: Option<usize>,
-    
-    animation: Option<ZoomAnimation>,
-    sidebar_animation: Option<ScrollAnimation>,
-    fa: Option<font_atlas::FontAtlas>,
-    sidebar_scroll_y: f32,
-    sidebar_target_scroll_y: f32,
-    
-    slope_start: Option<[f32; 2]>, // [dist, ele]
-    slope_result: Option<(f32, f32, f32)>, // [slope%, dist_diff, ele_diff]
-    
-    header_text_buffer: wgpu::Buffer,
-    num_header_text_vertices: u32,
-    header_bg_buffer: wgpu::Buffer,
-    header_render_pipeline: wgpu::RenderPipeline,
-    header_border_buffer: wgpu::Buffer,
-    num_header_border_vertices: u32,
-
-    // Morphing & View Mode
-    target_morph: f32,
     current_morph: f32,
-    view_mode: u32, 
-    
+    target_morph: f32,
+    view_mode: u32, // 0: Profile, 1: Trace 3D
     ctrl_pressed: bool,
+    
     camera_angle: [f32; 2], // [tilt, heading]
     camera_offset: [f32; 2],
     stage_center: [f32; 2],
+    
+    animation: Option<ZoomAnimation>,
+    morph_animation: Option<MorphAnimation>,
+    sidebar_animation: Option<ScrollAnimation>,
+    
+    fa: Option<FontAtlas>,
+    stages: Vec<Stage>,
+    selected_stage_idx: usize,
+    
+    sidebar_scroll_y: f32,
+    sidebar_target_scroll_y: f32,
+    slope_start: Option<[f32; 2]>,
+    slope_end: Option<[f32; 2]>,
+    slope_result: Option<(f32, f32, f32)>,
+
+    hover_stage_idx: Option<usize>,
 }
+
 
 
 impl<'a> State<'a> {
@@ -379,7 +384,7 @@ impl<'a> State<'a> {
         let axes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 128, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 144, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let _sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
@@ -397,22 +402,23 @@ impl<'a> State<'a> {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&uniform_bind_group_layout], push_constant_ranges: &[] });
         let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&uniform_bind_group_layout, &atlas_bgl], push_constant_ranges: &[] });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[wgpu::VertexBufferLayout { array_stride: 52, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_main", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let poly_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_poly", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_poly", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("Depth Texture"), size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[wgpu::VertexBufferLayout { array_stride: 52, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_main", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState { constant: -1000, slope_scale: -1.0, clamp: 0.0 } }), multisample: wgpu::MultisampleState::default(), multiview: None });
+        let poly_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_poly", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32, 3 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_poly", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() }, depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }), multisample: wgpu::MultisampleState::default(), multiview: None });
         let text_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_bold", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let text_screen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_screen", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_bold", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let text_ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_std", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
         let reticule_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_reticule", buffers: &[] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_reticule", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let dot_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_dot", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_dot", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let ground_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_poly", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32x3] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_ground", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let sidebar_bg_data = [
-            PolyVertex::new([0.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([500.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([0.0, size.height as f32, 0.0, 0.0], 0.0),
-            PolyVertex::new([0.0, size.height as f32, 0.0, 0.0], 0.0), PolyVertex::new([500.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([500.0, size.height as f32, 0.0, 0.0], 0.0),
-            // White border line (as a thin rectangle)
-            PolyVertex::new([500.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([502.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([500.0, size.height as f32, 0.0, 0.0], 0.0),
-            PolyVertex::new([500.0, size.height as f32, 0.0, 0.0], 0.0), PolyVertex::new([502.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([502.0, size.height as f32, 0.0, 0.0], 0.0),
+            PolyVertex::new([0.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([350.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([0.0, size.height as f32, 0.0, 0.0], 0.0),
+            PolyVertex::new([0.0, size.height as f32, 0.0, 0.0], 0.0), PolyVertex::new([350.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([350.0, size.height as f32, 0.0, 0.0], 0.0),
+            PolyVertex::new([350.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([352.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([350.0, size.height as f32, 0.0, 0.0], 0.0),
+            PolyVertex::new([350.0, size.height as f32, 0.0, 0.0], 0.0), PolyVertex::new([352.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([352.0, size.height as f32, 0.0, 0.0], 0.0),
         ];
         queue.write_buffer(&sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
         let ui_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
@@ -473,50 +479,33 @@ impl<'a> State<'a> {
         let header_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let header_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let header_border_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let ground_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let ground_line_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let ground_line_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-
         let mut state = State {
             surface, device, queue, config, size, window,
-            render_pipeline, poly_render_pipeline, text_render_pipeline, text_screen_pipeline, text_ui_pipeline, reticule_render_pipeline, dot_render_pipeline,
-            ground_render_pipeline,
-            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline,
-            sidebar_bg_buffer, selected_bg_buffer, hover_bg_buffer, sparkline_buffer, stage_borders_buffer,
-            hover_stage_idx: None,
+            render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
+            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, reticule_render_pipeline,
+            dot_render_pipeline, header_render_pipeline,
+            uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
-            ground_vertex_buffer,
-            num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_static_text_vertices: 0,
-            num_ground_vertices: 0,
-            num_ground_line_indices: 0,
-            num_stage_border_vertices: 0, num_spark_vertices: 0,
-            global_max_dist, global_max_ele, global_max_ratio_diff,
-            stages, selected_stage_idx, sidebar_text_buffer, num_sidebar_text_vertices: 0,
-            ground_line_buffer, ground_line_index_buffer,
-            target_morph: 0.0, current_morph: 0.0, view_mode: 0,
-            ctrl_pressed: false,
-            camera_angle: [0.5, 0.0], // 0.5 rad tilt
+            sidebar_bg_buffer, sidebar_text_buffer, sparkline_buffer, stage_borders_buffer,
+            selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer,
+            num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
+            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0,
+            profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
+            mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
+            pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
+            current_morph: 0.0, target_morph: 0.0, view_mode: 0, ctrl_pressed: false,
+            camera_angle: [0.5, 0.0],
             camera_offset: [350.0 + ((size.width as f32 - 350.0) * 0.5), size.height as f32 * 0.4],
             stage_center: [0.0, 0.0],
-            max_dist, max_ele, min_ele, profile_points, pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
-            mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0], uniform_buffer, uniform_bind_group, atlas_bind_group, animation: None,
-            sidebar_animation: None,
-            fa,
-            sidebar_scroll_y: 0.0,
-            sidebar_target_scroll_y: 0.0,
-            slope_start: None,
-            slope_result: None,
-            header_text_buffer,
-            num_header_text_vertices: 0,
-            header_bg_buffer,
-            header_render_pipeline,
-            header_border_buffer,
-            num_header_border_vertices: 0,
+            animation: None, morph_animation: None, sidebar_animation: None,
+            fa, stages, selected_stage_idx: 0,
+            sidebar_scroll_y: 0.0, sidebar_target_scroll_y: 0.0,
+            slope_start: None, slope_end: None, slope_result: None,
+            hover_stage_idx: None,
         };
 
         state.rebuild_ui();
-        state.select_stage(selected_stage_idx);
-
+        state.select_stage(0);
         state
     }
 
@@ -557,7 +546,7 @@ impl<'a> State<'a> {
                 
                 // 1. Nom de l'étape
                 let title = stage.name.clone();
-                let (pos, uvs) = font.get_text_geometry(&title);
+                let (pos, uvs): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&title);
                 let anchor = [x_start, y_top - 30.0];
                 for i in 0..(pos.len() / 2) {
                     sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.55 });
@@ -565,7 +554,7 @@ impl<'a> State<'a> {
 
                 // 2. Villes (Départ > Arrivée)
                 let cities = format!("{} > {}", stage.start, stage.finish);
-                let (pos, uvs) = font.get_text_geometry(&cities);
+                let (pos, uvs): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&cities);
                 let anchor_c = [x_start, y_top - 62.0];
                 for i in 0..(pos.len() / 2) {
                     sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_c, size: 0.33 });
@@ -573,7 +562,7 @@ impl<'a> State<'a> {
 
                 // 3. Date | Distance
                 let info = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
-                let (pos, uvs) = font.get_text_geometry(&info);
+                let (pos, uvs): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&info);
                 let anchor_i = [x_start, y_top - 86.0];
                 for i in 0..(pos.len() / 2) {
                     sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_i, size: 0.33 });
@@ -727,26 +716,26 @@ impl<'a> State<'a> {
             
             // Ligne 1: Etape N
             let line1 = format!("Etape {}", self.selected_stage_idx + 1);
-            let (pos, uvs) = font.get_text_geometry(&line1);
+            let (pos1, uvs1): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line1);
             let anchor1 = [370.0, self.size.height as f32 - 60.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor1, size: 1.32 });
+            for i in 0..(pos1.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos1[i*2], pos1[i*2+1]], uv: [uvs1[i*2], uvs1[i*2+1]], anchor: anchor1, size: 1.32 });
             }
 
             // Ligne 2: Départ > Arrivée
             let line2 = format!("{} > {}", stage.start, stage.finish);
-            let (pos, uvs) = font.get_text_geometry(&line2);
+            let (pos2, uvs2): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line2);
             let anchor2 = [370.0, self.size.height as f32 - 120.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor2, size: 0.66 });
+            for i in 0..(pos2.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos2[i*2], pos2[i*2+1]], uv: [uvs2[i*2], uvs2[i*2+1]], anchor: anchor2, size: 0.66 });
             }
 
             // Ligne 3: Date | Distance
             let line3 = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
-            let (pos, uvs) = font.get_text_geometry(&line3);
+            let (pos3, uvs3): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line3);
             let anchor3 = [370.0, self.size.height as f32 - 160.0];
-            for i in 0..(pos.len() / 2) {
-                header_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor3, size: 0.48 });
+            for i in 0..(pos3.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos3[i*2], pos3[i*2+1]], uv: [uvs3[i*2], uvs3[i*2+1]], anchor: anchor3, size: 0.48 });
             }
 
             // Boutons "Profil" et "Tracé"
@@ -758,12 +747,12 @@ impl<'a> State<'a> {
             let labels = ["Profil", "Trace"];
             for i in 0..2 {
                 let bx = btn_x_start + (i as f32 * (btn_w + btn_gap));
-                let (pos, uvs) = font.get_text_geometry(labels[i]);
+                let (pos_btn, uvs_btn): (Vec<f32>, Vec<f32>) = font.get_text_geometry(labels[i]);
                 // Centrage du texte dans le bouton
                 let text_w = font.compute_label_size(labels[i], 1.0) * 0.4 * 50.0; // Approximation
                 let anchor = [bx + (btn_w - text_w) * 0.5, btn_y - 32.0];
-                for j in 0..(pos.len() / 2) {
-                    header_text_vertices.push(TextVertex { pos: [pos[j*2], pos[j*2+1]], uv: [uvs[j*2], uvs[j*2+1]], anchor, size: 0.4 });
+                for j in 0..(pos_btn.len() / 2) {
+                    header_text_vertices.push(TextVertex { pos: [pos_btn[j*2], pos_btn[j*2+1]], uv: [uvs_btn[j*2], uvs_btn[j*2+1]], anchor, size: 0.4 });
                 }
             }
         }
@@ -819,13 +808,13 @@ impl<'a> State<'a> {
             if y < y_min { continue; }
             if let Some(ref font) = self.fa {
                 let text = format!("{}m", h);
-                let (pos, uvs) = font.get_text_geometry(&text);
+                let (pos_ax, uvs_ax): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
                 // Décalage fixe en coordonnées monde, cappé pour ne pas dériver au zoom
                 let offset_x = -max_dist * 0.045;
                 let anchor = [offset_x, y];
                 let size = 0.3;
-                for i in 0..(pos.len() / 2) {
-                    static_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size });
+                for i in 0..(pos_ax.len() / 2) {
+                    static_text_vertices.push(TextVertex { pos: [pos_ax[i*2], pos_ax[i*2+1]], uv: [uvs_ax[i*2], uvs_ax[i*2+1]], anchor, size });
                 }
             }
         }
@@ -913,8 +902,8 @@ impl<'a> State<'a> {
                 }
             }
 
-            poly_vertices.push(PolyVertex { pos: [p[0], p[1], lx, ly], side: 1.0, _pad: [turn_intensity, 0.0, 0.0] });
-            poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min, lx, ly], side: 0.0, _pad: [turn_intensity, 0.0, 0.0] }); 
+            poly_vertices.push(PolyVertex { pos: [p[0], p[1], lx, ly], side: 1.0, flag: 0.0, _pad: [turn_intensity, 0.0] });
+            poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min, lx, ly], side: 0.0, flag: 0.0, _pad: [turn_intensity, 0.0] }); 
             if i < self.profile_points.len() - 1 {
                 let b = (i * 2) as u32;
                 poly_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
@@ -931,63 +920,6 @@ impl<'a> State<'a> {
         });
         self.queue.write_buffer(&self.poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices)); 
         self.num_poly_indices = poly_indices.len() as u32;
-
-        // 3D Ground Slab
-        let mut min_lx = f32::MAX;
-        let mut max_lx = f32::MIN;
-        let mut min_ly = f32::MAX;
-        let mut max_ly = f32::MIN;
-        
-        for i in 0..self.profile_points.len() {
-            let lx = active_stage.vertices[i * 26 + 2];
-            let ly = active_stage.vertices[i * 26 + 3];
-            min_lx = min_lx.min(lx);
-            max_lx = max_lx.max(lx);
-            min_ly = min_ly.min(ly);
-            max_ly = max_ly.max(ly);
-        }
-
-        let slab_margin = 5000.0; // 5km margin around the stage
-        let gx0 = min_lx - slab_margin;
-        let gx1 = max_lx + slab_margin;
-        let gy0 = min_ly - slab_margin;
-        let gy1 = max_ly + slab_margin;
-        let gz0 = 0.0;
-        let gz1 = -100.0; // 100m thickness for the slab
-
-        let mut ground_vertices = Vec::new();
-        // Top surface (gz0) - We use pos[0]=u, side=v, extra.y=1.0 as flag
-        ground_vertices.extend_from_slice(&[
-            PolyVertex { pos: [0.0, gz0, gx0, gy0], side: 0.0, _pad: [0.0, 1.0, 0.0] },
-            PolyVertex { pos: [1.0, gz0, gx1, gy0], side: 0.0, _pad: [0.0, 1.0, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx0, gy1], side: 1.0, _pad: [0.0, 1.0, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx0, gy1], side: 1.0, _pad: [0.0, 1.0, 0.0] },
-            PolyVertex { pos: [1.0, gz0, gx1, gy0], side: 0.0, _pad: [0.0, 1.0, 0.0] },
-            PolyVertex { pos: [1.0, gz0, gx1, gy1], side: 1.0, _pad: [0.0, 1.0, 0.0] },
-        ]);
-        // Bottom
-        ground_vertices.extend_from_slice(&[
-            PolyVertex { pos: [0.0, gz1, gx0, gy0], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx0, gy1], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx1, gy0], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx1, gy0], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx0, gy1], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx1, gy1], side: 0.0, _pad: [0.0, 0.0, 0.0] },
-        ]);
-        // Sides
-        let s_flag = 0.0; // No grid on sides
-        ground_vertices.extend_from_slice(&[
-            PolyVertex { pos: [0.0, gz0, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz1, gx0, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx0, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz0, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-            PolyVertex { pos: [0.0, gz0, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx1, gy0], side: 0.0, _pad: [0.0, s_flag, 0.0] }, PolyVertex { pos: [0.0, gz1, gx1, gy1], side: 0.0, _pad: [0.0, s_flag, 0.0] },
-        ]);
-        self.num_ground_vertices = ground_vertices.len() as u32;
-        self.queue.write_buffer(&self.ground_vertex_buffer, 0, bytemuck::cast_slice(&ground_vertices));
 
         self.update_axes();
  
@@ -1026,10 +958,17 @@ impl<'a> State<'a> {
             let elapsed = anim.start_time.elapsed().as_secs_f64();
             let duration = anim.duration.as_secs_f64();
             let t = (elapsed / duration).min(1.0);
-            let eased_t = 1.0 - (1.0 - t).powi(3); 
+            let eased_t = 1.0 - (1.0 - t).powi(3);
             self.pos_scale = anim.start_scale + (anim.target_scale - anim.start_scale) * eased_t;
-            self.pos_translate[0] = anim.start_translate[0] + (anim.target_translate[0] - anim.start_translate[0]) * eased_t;
-            self.pos_translate[1] = anim.start_translate[1] + (anim.target_translate[1] - anim.start_translate[1]) * eased_t;
+            if self.view_mode == 1 {
+                // En 3D : l'animation interpole camera_offset
+                self.camera_offset[0] = (anim.start_translate[0] + (anim.target_translate[0] - anim.start_translate[0]) * eased_t) as f32;
+                self.camera_offset[1] = (anim.start_translate[1] + (anim.target_translate[1] - anim.start_translate[1]) * eased_t) as f32;
+            } else {
+                // En 2D : l'animation interpole pos_translate
+                self.pos_translate[0] = anim.start_translate[0] + (anim.target_translate[0] - anim.start_translate[0]) * eased_t;
+                self.pos_translate[1] = anim.start_translate[1] + (anim.target_translate[1] - anim.start_translate[1]) * eased_t;
+            }
             if t >= 1.0 { self.animation = None; }
         }
 
@@ -1075,6 +1014,8 @@ impl<'a> State<'a> {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor { label: Some("Depth Texture"), size: wgpu::Extent3d { width: new_size.width, height: new_size.height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
+            self.depth_texture = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
             self.rebuild_ui();
             self.select_stage(self.selected_stage_idx);
         }
@@ -1109,6 +1050,24 @@ impl<'a> State<'a> {
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         let capped_rel_scale = rel_scale.min(10.0);
         
+        // --- 3D VIEW-PROJ MATRIX CALCULATION ---
+        let heading = self.camera_angle[1];
+        let tilt = self.camera_angle[0];
+        let rotation = glam::Mat4::from_rotation_x(-tilt) * glam::Mat4::from_rotation_z(heading);
+        let s_3d = self.pos_scale as f32;
+        let scale_mat = glam::Mat4::from_scale(glam::vec3(s_3d, s_3d, s_3d));
+        let center_offset = glam::Mat4::from_translation(glam::vec3(-self.stage_center[0], -self.stage_center[1], 0.0));
+        let screen_offset = glam::Mat4::from_translation(glam::vec3(self.camera_offset[0], self.camera_offset[1], 0.0));
+        let model_view = screen_offset * scale_mat * rotation * center_offset;
+        
+        // Use Right-Handed orthographic projection
+        let mut ortho = glam::Mat4::orthographic_rh(0.0, self.size.width as f32, 0.0, self.size.height as f32, -20000.0, 20000.0);
+        // Adaptation for WGPU Z range [0, 1] instead of [-1, 1]
+        let mut wgpu_fix = glam::Mat4::IDENTITY;
+        wgpu_fix.z_axis.z = 0.5;
+        wgpu_fix.w_axis.z = 0.5;
+        let view_proj = wgpu_fix * ortho * model_view;
+
         let mouse_world_x = (self.mouse_pos[0] - self.pos_translate[0] as f32) / self.pos_scale as f32;
         let world_x = mouse_world_x.clamp(0.0, self.max_dist);
         let mut current_ele = 0.0;
@@ -1130,25 +1089,23 @@ impl<'a> State<'a> {
             }
         }
         let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
-        // Shift Y rendering based on y_min
         let profile_y_screen = (current_ele - y_min) * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32;
+
         let uniforms = Uniforms {
+            view_proj,
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32 - (y_min * y_stretch as f32 * self.pos_scale as f32)],
             scale: self.pos_scale as f32, thickness: dyn_thickness,
             resolution: [self.size.width as f32, self.size.height as f32],
             y_stretch: y_stretch as f32,
             morph: self.current_morph,
-            color: [1.0, 1.0, 0.0, 1.0],
+            color: [1.0, 0.85, 0.0, 1.0], // Jaune TDF vif pour le stroke
             mouse_pos: [profile_x_screen, profile_y_screen],
             raw_mouse_x: if mouse_world_x >= 0.0 && mouse_world_x <= self.max_dist && self.mouse_pos[0] > 350.0 { self.mouse_pos[0] } else { -1000.0 },
             max_dist: self.max_dist,
             y_min,
             y_max: y_min + delta_e_displayed as f32,
-            camera_angle: self.camera_angle,
-            camera_offset: self.camera_offset,
-            stage_center: self.stage_center,
             rel_scale: capped_rel_scale,
-            _pad: [0.0; 3],
+            _pad: [0.0; 1],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -1156,55 +1113,114 @@ impl<'a> State<'a> {
         if let Some(ref font) = self.fa {
             let gap = 15.0; let s = 0.4; let row_h = font.font_size * 1.4;
             let half_h = (row_h * s * capped_rel_scale) / 2.0;
-            
-            let alt_text = format!("{:.0} m", current_ele);
-            let (pos_alt, uvs_alt) = font.get_text_geometry(&alt_text);
-            let anchor_alt = [profile_x_screen + gap, profile_y_screen + half_h + 5.0];
-            for i in 0..(pos_alt.len() / 2) { 
-                dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: anchor_alt, size: s }); 
-            }
 
-            let dist_text = format!("{:.2} km", world_x / 1000.0);
-            let (pos_dist, uvs_dist) = font.get_text_geometry(&dist_text);
-            let anchor_dist = [profile_x_screen + gap, profile_y_screen - half_h - 5.0];
-            for i in 0..(pos_dist.len() / 2) { 
-                dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: anchor_dist, size: s }); 
+            if self.current_morph < 0.5 {
+                
+                let alt_text = format!("{:.0} m", current_ele);
+                let (pos_alt, uvs_alt): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&alt_text);
+                let anchor_alt = [profile_x_screen + gap, profile_y_screen + half_h + 5.0];
+                for i in 0..(pos_alt.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos_alt[i*2], pos_alt[i*2+1]], uv: [uvs_alt[i*2], uvs_alt[i*2+1]], anchor: anchor_alt, size: s }); 
+                }
+
+                let dist_text = format!("{:.2} km", world_x / 1000.0);
+                let (pos_dist, uvs_dist): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&dist_text);
+                let anchor_dist = [profile_x_screen + gap, profile_y_screen - half_h - 5.0];
+                for i in 0..(pos_dist.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos_dist[i*2], pos_dist[i*2+1]], uv: [uvs_dist[i*2], uvs_dist[i*2+1]], anchor: anchor_dist, size: s }); 
+                }
             }
 
             // Affichage de la pente (Slope)
             if let Some(res) = self.slope_result {
                 let text = format!("Pente: {:.2}%  |  D+: {:.1}m  |  Dist: {:.2}km", res.0, res.2, res.1 / 1000.0);
-                let (pos, uvs) = font.get_text_geometry(&text);
+                let (pos_slope, uvs_slope): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
                 let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
                 let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
                 let anchor = [370.0, anchor_y];
-                for i in 0..(pos.len() / 2) { 
-                    dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
+                for i in 0..(pos_slope.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos_slope[i*2], pos_slope[i*2+1]], uv: [uvs_slope[i*2], uvs_slope[i*2+1]], anchor, size: 0.5 }); 
                 }
             } else if let Some(_) = self.slope_start {
                 let text = "Cliquez sur le 2eme point (clic droit)";
-                let (pos, uvs) = font.get_text_geometry(&text);
+                let (pos_help, uvs_help): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
                 let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
                 let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
                 let anchor = [370.0, anchor_y];
-                for i in 0..(pos.len() / 2) { 
-                    dyn_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 }); 
+                for i in 0..(pos_help.len() / 2) { 
+                    dyn_vertices.push(TextVertex { pos: [pos_help[i*2], pos_help[i*2+1]], uv: [uvs_help[i*2], uvs_help[i*2+1]], anchor, size: 0.5 }); 
                 }
             }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&dyn_buf, 0, bytemuck::cast_slice(&dyn_vertices));
 
+        // --- PASS 1: 3D geometry with depth buffer ---
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: None, color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("3D Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            
+            pass.set_scissor_rect(352, 0, self.size.width - 352, self.size.height);
+
+            pass.set_pipeline(&self.poly_render_pipeline);
+            pass.set_vertex_buffer(0, self.poly_vertex_buffer.slice(..));
+            pass.set_index_buffer(self.poly_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.num_poly_indices, 0, 0..1);
+
+            // Draw Profile/Trace Stroke (always needed)
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.num_indices, 0, 0..1);
+
+            // Draw optional Axes (only in 2D Profile)
+            if self.current_morph < 0.5 {
+                pass.set_vertex_buffer(0, self.axes_vertex_buffer.slice(..));
+                pass.set_index_buffer(self.axes_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.num_axes_indices, 0, 0..1);
+            }
+        }
+
+        // --- PASS 2: 2D UI without depth buffer ---
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("UI Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // Don't clear — composite on top of 3D
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
             // 1. Sidebar Background
             pass.set_pipeline(&self.ui_render_pipeline);
             pass.set_vertex_buffer(0, self.sidebar_bg_buffer.slice(..));
             let num_bg = if self.stages.len() as f32 * 260.0 > self.size.height as f32 - 100.0 { 18 } else { 12 };
-            pass.draw(0..num_bg, 0..1); 
-            
+            pass.draw(0..num_bg, 0..1);
+
             // 2. Selection Highlight
             pass.set_pipeline(&self.selected_render_pipeline);
             pass.set_vertex_buffer(0, self.selected_bg_buffer.slice(..));
@@ -1223,8 +1239,8 @@ impl<'a> State<'a> {
                 pass.draw(0..6, 0..1);
             }
 
-            // 4. CADRES BLANCS (White Outlines)
-            pass.set_pipeline(&self.sparkline_render_pipeline); // fs_white
+            // 4. Card borders
+            pass.set_pipeline(&self.sparkline_render_pipeline);
             pass.set_vertex_buffer(0, self.stage_borders_buffer.slice(..));
             pass.draw(0..self.num_stage_border_vertices, 0..1);
 
@@ -1233,58 +1249,48 @@ impl<'a> State<'a> {
             pass.set_vertex_buffer(0, self.sparkline_buffer.slice(..));
             pass.draw(0..self.num_spark_vertices, 0..1);
 
+            // 6. Sidebar text
             if let Some(ref bg) = self.atlas_bind_group {
-                pass.set_pipeline(&self.text_ui_pipeline); 
+                pass.set_pipeline(&self.text_ui_pipeline);
                 pass.set_bind_group(1, bg, &[]);
-                pass.set_vertex_buffer(0, self.sidebar_text_buffer.slice(..)); 
+                pass.set_vertex_buffer(0, self.sidebar_text_buffer.slice(..));
                 pass.draw(0..self.num_sidebar_text_vertices, 0..1);
             }
 
-            // Draw Graph (Scissored)
+            // 7. Reticule + graph text (scissored to graph area)
             pass.set_scissor_rect(352, 0, self.size.width - 352, self.size.height);
-
-            // Ground plane (Khaki slab)
-            pass.set_pipeline(&self.ground_render_pipeline);
-            pass.set_vertex_buffer(0, self.ground_vertex_buffer.slice(..));
-            pass.draw(0..self.num_ground_vertices, 0..1);
-
-            pass.set_pipeline(&self.poly_render_pipeline);
-            pass.set_vertex_buffer(0, self.poly_vertex_buffer.slice(..));
-            pass.set_index_buffer(self.poly_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.num_poly_indices, 0, 0..1);
-
-            pass.set_pipeline(&self.render_pipeline);
-            pass.set_vertex_buffer(0, self.axes_vertex_buffer.slice(..));
-            pass.set_index_buffer(self.axes_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.num_axes_indices, 0, 0..1);
-            
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.num_indices, 0, 0..1);
-            
-            pass.set_pipeline(&self.reticule_render_pipeline);
-            pass.draw(0..6, 0..1);
-            
-            if let Some(ref bg) = self.atlas_bind_group {
-                pass.set_pipeline(&self.text_render_pipeline); 
-                pass.set_bind_group(1, bg, &[]);
-                pass.set_vertex_buffer(0, self.static_text_buffer.slice(..)); 
-                pass.draw(0..self.num_static_text_vertices, 0..1);
-                
-                pass.set_pipeline(&self.text_screen_pipeline); 
-                pass.set_vertex_buffer(0, dyn_buf.slice(..));
-                let num_dyn = dyn_vertices.len() as u32;
-                pass.draw(0..num_dyn, 0..1); 
+            if self.current_morph < 0.5 {
+                pass.set_pipeline(&self.reticule_render_pipeline);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); // Use main vertex buffer for reticule pos
+                pass.draw(0..6, 0..1);
             }
 
-            // 6. Header
             if let Some(ref bg) = self.atlas_bind_group {
-                pass.set_pipeline(&self.text_ui_pipeline); 
+                if self.current_morph < 0.5 {
+                    pass.set_pipeline(&self.text_render_pipeline);
+                    pass.set_bind_group(1, bg, &[]);
+                    pass.set_vertex_buffer(0, self.static_text_buffer.slice(..));
+                    pass.draw(0..self.num_static_text_vertices, 0..1);
+                }
+
+                pass.set_pipeline(&self.text_screen_pipeline);
                 pass.set_bind_group(1, bg, &[]);
-                pass.set_vertex_buffer(0, self.header_text_buffer.slice(..)); 
+                pass.set_vertex_buffer(0, dyn_buf.slice(..));
+                let num_dyn = dyn_vertices.len() as u32;
+                pass.draw(0..num_dyn, 0..1);
+            }
+
+            // 8. Header text (full width)
+            pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+            if let Some(ref bg) = self.atlas_bind_group {
+                pass.set_pipeline(&self.text_ui_pipeline);
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, self.header_text_buffer.slice(..));
                 pass.draw(0..self.num_header_text_vertices, 0..1);
             }
         }
+
+
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -1338,13 +1344,13 @@ fn main() {
                     state.hover_stage_idx = None;
                 }
                 if state.mouse_pressed {
-                    let dx = position.x - state.last_mouse_pos[0];
-                    let dy = position.y - state.last_mouse_pos[1];
+                    let dx = position.x - state.last_mouse_pos[0] as f64;
+                    let dy = position.y - state.last_mouse_pos[1] as f64;
                     
                     if state.view_mode == 1 {
                         if state.ctrl_pressed {
-                            state.camera_angle[1] -= (dx as f32) * 0.01; // Heading
-                            state.camera_angle[0] = (state.camera_angle[0] + (dy as f32) * 0.01).clamp(0.0, 1.6); // Full rotation (Top to Profile)
+                            state.camera_angle[1] += (dx as f32) * 0.01; // Corrected Heading rotation
+                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * 0.01).clamp(0.0, 1.6); // Corrected Tilt rotation
                         } else {
                             // Panning in 3D
                             state.camera_offset[0] += dx as f32;
@@ -1355,7 +1361,7 @@ fn main() {
                         state.pos_translate[1] -= dy;
                     }
                 }
-                state.last_mouse_pos = [position.x, position.y];
+                state.last_mouse_pos = [position.x as f32, position.y as f32];
             }
             WindowEvent::MouseInput { state: s, button, .. } => {
                 if *button == MouseButton::Left {
@@ -1423,18 +1429,49 @@ fn main() {
                     return;
                 }
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
-                let target_scale = (if amount > 0.0 { state.pos_scale * 1.5 } else { state.pos_scale / 1.5 }).clamp(state.initial_scale, state.initial_scale * 500.0);
-                let target_translate;
-                if target_scale == state.initial_scale { 
-                    let rpw = (state.size.width as f64) - 350.0;
-                    let margin_x = 350.0 + rpw * 0.1;
-                    target_translate = [margin_x, (state.size.height as f64) * 0.25]; 
+                let zoom_in = amount > 0.0;
+                let factor = if zoom_in { 1.5_f64 } else { 1.0 / 1.5_f64 };
+                let target_scale = (state.pos_scale * factor).clamp(state.initial_scale, state.initial_scale * 500.0);
+
+                if state.view_mode == 1 {
+                    // === ZOOM 3D animé centré sur la souris ===
+                    // screen_pt = world_rotated * scale + camera_offset
+                    // Pour fixer le point sous la souris : camera_offset_new = mouse + (camera_offset - mouse) * new_scale/old_scale
+                    let mx = state.mouse_pos[0];
+                    let my = state.mouse_pos[1];
+                    let scale_factor = (target_scale / state.pos_scale) as f32;
+                    let target_offset = [
+                        mx + (state.camera_offset[0] - mx) * scale_factor,
+                        my + (state.camera_offset[1] - my) * scale_factor,
+                    ];
+                    // Animer scale + camera_offset simultanément avec easing
+                    state.animation = Some(ZoomAnimation {
+                        start_time: Instant::now(),
+                        duration: Duration::from_millis(300),
+                        start_scale: state.pos_scale,
+                        target_scale,
+                        start_translate: [state.camera_offset[0] as f64, state.camera_offset[1] as f64],
+                        target_translate: [target_offset[0] as f64, target_offset[1] as f64],
+                    });
                 } else {
-                    let wx = (state.mouse_pos[0] as f64 - state.pos_translate[0]) / state.pos_scale;
-                    let wy = (state.mouse_pos[1] as f64 - state.pos_translate[1]) / state.pos_scale;
-                    target_translate = [state.mouse_pos[0] as f64 - wx * target_scale, state.mouse_pos[1] as f64 - wy * target_scale];
+                    // === ZOOM 2D animé centré sur la souris ===
+                    let target_translate = if target_scale == state.initial_scale {
+                        let rpw = (state.size.width as f64) - 350.0;
+                        [350.0 + rpw * 0.1, (state.size.height as f64) * 0.25]
+                    } else {
+                        let wx = (state.mouse_pos[0] as f64 - state.pos_translate[0]) / state.pos_scale;
+                        let wy = (state.mouse_pos[1] as f64 - state.pos_translate[1]) / state.pos_scale;
+                        [state.mouse_pos[0] as f64 - wx * target_scale, state.mouse_pos[1] as f64 - wy * target_scale]
+                    };
+                    state.animation = Some(ZoomAnimation {
+                        start_time: Instant::now(),
+                        duration: Duration::from_millis(300),
+                        start_scale: state.pos_scale,
+                        target_scale,
+                        start_translate: state.pos_translate,
+                        target_translate,
+                    });
                 }
-                state.animation = Some(ZoomAnimation { start_time: Instant::now(), duration: Duration::from_millis(350), start_scale: state.pos_scale, target_scale, start_translate: state.pos_translate, target_translate });
             }
             WindowEvent::RedrawRequested => {
                 state.update();
