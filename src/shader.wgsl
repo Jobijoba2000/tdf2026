@@ -38,7 +38,7 @@ struct VertexOutput {
     @location(1) uv: vec2<f32>,
     @location(2) world_pos: vec3<f32>,
     @location(3) dist: f32,
-    @location(4) extra: vec3<f32>,
+    @location(4) morph: f32,
 };
 
 fn project_2d(dist: f32, ele: f32) -> vec2<f32> {
@@ -89,6 +89,29 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     out.uv = vec2<f32>(model.side, 0.0);
     out.world_pos = world_pos.xyz;
     out.dist = model.pos.x;
+    out.morph = local_morph;
+    return out;
+}
+
+@vertex
+fn vs_axes(model: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    
+    let p2d = project_2d(model.pos.x, model.pos.y);
+    let prev2d = project_2d(model.prev.x, model.prev.y);
+    let next2d = project_2d(model.next.x, model.next.y);
+    
+    let dir = normalize(next2d - prev2d);
+    let normal = vec2<f32>(-dir.y, dir.x);
+    let final_p2d = p2d + normal * model.side * uniforms.thickness;
+
+    // Convert to NDC space
+    out.clip_position = vec4<f32>((final_p2d / uniforms.resolution) * 2.0 - 1.0, 0.0, 1.0);
+    out.morph = uniforms.morph;
+    out.ele = 0.0;
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.world_pos = vec3<f32>(0.0, 0.0, 0.0);
+    out.dist = 0.0;
     return out;
 }
 
@@ -112,6 +135,7 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     out.uv = vec2<f32>(model.side, model.flag);
     out.world_pos = world_pos.xyz;
     out.dist = model.pos.x;
+    out.morph = local_morph;
     return out;
 }
 
@@ -124,6 +148,7 @@ fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
         0.0, 1.0
     );
     out.uv = vec2<f32>(0.0, 0.0);
+    out.morph = uniforms.morph;
     return out;
 }
 
@@ -159,6 +184,12 @@ fn fs_yellow(in: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return uniforms.color; // Jaune vif TDF
+}
+
+@fragment
+fn fs_axes(in: VertexOutput) -> @location(0) vec4<f32> {
+    let alpha = clamp(1.0 - in.morph * 2.0, 0.0, 1.0); // Disparaît vite
+    return vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
 }
 
 struct TextVertexInput {

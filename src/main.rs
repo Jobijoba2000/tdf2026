@@ -123,6 +123,7 @@ struct State<'a> {
     reticule_render_pipeline: wgpu::RenderPipeline,
     dot_render_pipeline: wgpu::RenderPipeline,
     header_render_pipeline: wgpu::RenderPipeline,
+    axes_render_pipeline: wgpu::RenderPipeline,
 
     // Buffers & Resources
     uniform_bind_group: wgpu::BindGroup,
@@ -426,6 +427,14 @@ impl<'a> State<'a> {
         let header_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_header_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let selected_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_selected_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let hover_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+        let axes_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { 
+            label: Some("Axes Pipeline"), layout: Some(&pipeline_layout), 
+            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_axes", buffers: &[wgpu::VertexBufferLayout { array_stride: 52, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32] }] }, 
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_axes", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), 
+            primitive: wgpu::PrimitiveState::default(), 
+            depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }), 
+            multisample: wgpu::MultisampleState::default(), multiview: None 
+        });
         
         // Sparkline pipeline
         let sparkline_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_yellow", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
@@ -484,7 +493,7 @@ impl<'a> State<'a> {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, reticule_render_pipeline,
-            dot_render_pipeline, header_render_pipeline,
+            dot_render_pipeline, header_render_pipeline, axes_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             sidebar_bg_buffer, sidebar_text_buffer, sparkline_buffer, stage_borders_buffer,
@@ -733,7 +742,7 @@ impl<'a> State<'a> {
             }
 
             // Aide contextuelle en haut à droite
-            let help_text = if self.view_mode == 0 { "[T] Voir le tracé 3D" } else { "[T] Retour au profil 2D" };
+            let help_text = if self.view_mode == 0 { "[Espace] Voir le tracé 3D" } else { "[Espace] Retour au profil 2D" };
             let (pos_h, uvs_h): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_text);
             let anchor_h = [self.size.width as f32 - 250.0, self.size.height as f32 - 45.0];
             for i in 0..(pos_h.len() / 2) {
@@ -763,13 +772,15 @@ impl<'a> State<'a> {
         
         let mut add_line = |p1: [f32; 2], p2: [f32; 2]| {
             let base = axes_vertices.len() as u32;
-            let v1 = [p1[0], p1[1], 0.0, 0.0];
-            let v2 = [p2[0], p2[1], 0.0, 0.0];
-            axes_vertices.push(Vertex { pos: v1, prev: v1, next: v2, side: 1.0 });
-            axes_vertices.push(Vertex { pos: v1, prev: v1, next: v2, side: -1.0 });
-            axes_vertices.push(Vertex { pos: v2, prev: v1, next: v2, side: 1.0 });
-            axes_vertices.push(Vertex { pos: v2, prev: v1, next: v2, side: -1.0 });
-            axes_indices.extend_from_slice(&[base, base+1, base+2, base+1, base+3, base+2]);
+            let n1 = [p1[0], p1[1], 0.0, 0.0];
+            let n2 = [p2[0], p2[1], 0.0, 0.0];
+            
+            axes_vertices.push(Vertex { pos: n1, prev: n1, next: n2, side: -1.0 });
+            axes_vertices.push(Vertex { pos: n1, prev: n1, next: n2, side: 1.0 });
+            axes_vertices.push(Vertex { pos: n2, prev: n1, next: n2, side: -1.0 });
+            axes_vertices.push(Vertex { pos: n2, prev: n1, next: n2, side: 1.0 });
+
+            axes_indices.extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 3, base + 2]);
         };
         
         add_line([-ext_x, y_min], [max_dist + ext_x, y_min]);
@@ -1179,6 +1190,7 @@ impl<'a> State<'a> {
 
             // Draw optional Axes (only in 2D Profile)
             if self.current_morph < 0.5 {
+                pass.set_pipeline(&self.axes_render_pipeline);
                 pass.set_vertex_buffer(0, self.axes_vertex_buffer.slice(..));
                 pass.set_index_buffer(self.axes_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..self.num_axes_indices, 0, 0..1);
@@ -1299,11 +1311,11 @@ fn main() {
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: key, state: ElementState::Pressed, .. }, .. } => {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
-                    Key::Character(c) if c == "t" || c == "T" => {
+                    Key::Named(NamedKey::Space) => {
                         let target = if state.view_mode == 0 { 1.0 } else { 0.0 };
                         state.morph_animation = Some(MorphAnimation {
                             start_time: Instant::now(),
-                            duration: Duration::from_millis(1800),
+                            duration: Duration::from_millis(1400),
                             start_morph: state.current_morph,
                             target_morph: target,
                         });
