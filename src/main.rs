@@ -171,6 +171,7 @@ struct State<'a> {
     
     mouse_pos: [f32; 2],
     mouse_pressed: bool,
+    right_mouse_pressed: bool,
     last_mouse_pos: [f32; 2],
     
     pos_translate: [f64; 2],
@@ -491,7 +492,7 @@ impl<'a> State<'a> {
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
             num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0,
             profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
-            mouse_pos: [0.0, 0.0], mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
+            mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             current_morph: 0.0, target_morph: 0.0, view_mode: 0, ctrl_pressed: false,
             camera_angle: [0.5, 0.0],
@@ -956,12 +957,16 @@ impl<'a> State<'a> {
         }
 
         // Morphing animation
-        if (self.current_morph - self.target_morph).abs() > 0.001 {
-            let step = 0.04;
-            if self.current_morph < self.target_morph {
-                self.current_morph = (self.current_morph + step).min(self.target_morph);
-            } else {
-                self.current_morph = (self.current_morph - step).max(self.target_morph);
+        if let Some(anim) = &self.morph_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 3.0 * t * t - 2.0 * t * t * t; // Smoothstep easing
+            self.current_morph = anim.start_morph + (anim.target_morph - anim.start_morph) * eased_t;
+            
+            if t >= 1.0 {
+                self.current_morph = anim.target_morph;
+                self.morph_animation = None;
             }
             self.window.request_redraw();
         }
@@ -1295,9 +1300,21 @@ fn main() {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
                     Key::Character(c) if c == "t" || c == "T" => {
+                        let target = if state.view_mode == 0 { 1.0 } else { 0.0 };
+                        state.morph_animation = Some(MorphAnimation {
+                            start_time: Instant::now(),
+                            duration: Duration::from_millis(1800),
+                            start_morph: state.current_morph,
+                            target_morph: target,
+                        });
+
                         if state.view_mode == 0 {
                             state.view_mode = 1;
                             state.target_morph = 1.0;
+                            // Reset 3D camera to neutral top-down
+                            state.camera_angle = [0.0, 0.0];
+                            let rpw = (state.size.width as f32) - 352.0;
+                            state.camera_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
                         } else {
                             state.view_mode = 0;
                             state.target_morph = 0.0;
@@ -1326,20 +1343,21 @@ fn main() {
                 } else {
                     state.hover_stage_idx = None;
                 }
-                if state.mouse_pressed {
+                if state.mouse_pressed || state.right_mouse_pressed {
                     let dx = position.x - state.last_mouse_pos[0] as f64;
                     let dy = position.y - state.last_mouse_pos[1] as f64;
                     
                     if state.view_mode == 1 {
-                        if state.ctrl_pressed {
-                            state.camera_angle[1] += (dx as f32) * 0.005; // Reduced sensitivity
-                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * 0.005).clamp(0.0, 1.6); // Reduced sensitivity
-                        } else {
-                            // Panning in 3D
+                        if state.right_mouse_pressed {
+                            // Rotation with Right Click
+                            state.camera_angle[1] += (dx as f32) * 0.005; 
+                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * 0.005).clamp(0.0, 1.6); 
+                        } else if state.mouse_pressed {
+                            // Panning in 3D with Left Click
                             state.camera_offset[0] += dx as f32;
                             state.camera_offset[1] -= dy as f32;
                         }
-                    } else {
+                    } else if state.mouse_pressed {
                         state.pos_translate[0] += dx;
                         state.pos_translate[1] -= dy;
                     }
@@ -1349,31 +1367,36 @@ fn main() {
             WindowEvent::MouseInput { state: s, button, .. } => {
                 if *button == MouseButton::Left {
                     state.mouse_pressed = *s == ElementState::Pressed;
-                    if state.mouse_pressed && state.mouse_pos[0] < 350.0 {
-                        let y_from_top = state.size.height as f32 - state.mouse_pos[1];
-                        let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
-                        if idx >= 0 && (idx as usize) < state.stages.len() {
-                            state.select_stage(idx as usize);
-                            state.slope_start = None;
-                            state.slope_result = None;
-                        }
-                    }
-                } else if *button == MouseButton::Right && *s == ElementState::Pressed {
-                    if state.mouse_pos[0] >= 352.0 {
-                        let p = state.get_profile_at_mouse();
-                        if let Some(start) = state.slope_start {
-                            let dist_diff = (p[0] - start[0]).abs();
-                            let ele_diff = p[1] - start[1];
-                            if dist_diff > 0.1 {
-                                let slope = (ele_diff / dist_diff) * 100.0;
-                                state.slope_result = Some((slope, dist_diff, ele_diff));
+                    
+                    if state.mouse_pressed {
+                        if state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
+                            // Slope Calculation with Ctrl + Left Click
+                            let p = state.get_profile_at_mouse();
+                            if let Some(start) = state.slope_start {
+                                let dist_diff = (p[0] - start[0]).abs();
+                                let ele_diff = p[1] - start[1];
+                                if dist_diff > 0.1 {
+                                    let slope = (ele_diff / dist_diff) * 100.0;
+                                    state.slope_result = Some((slope, dist_diff, ele_diff));
+                                }
+                                state.slope_start = None;
+                            } else {
+                                state.slope_start = Some(p);
+                                state.slope_result = None;
                             }
-                            state.slope_start = None;
-                        } else {
-                            state.slope_start = Some(p);
-                            state.slope_result = None;
+                        } else if state.mouse_pos[0] < 350.0 {
+                            // Sidebar selection
+                            let y_from_top = state.size.height as f32 - state.mouse_pos[1];
+                            let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
+                            if idx >= 0 && (idx as usize) < state.stages.len() {
+                                state.select_stage(idx as usize);
+                                state.slope_start = None;
+                                state.slope_result = None;
+                            }
                         }
                     }
+                } else if *button == MouseButton::Right {
+                    state.right_mouse_pressed = *s == ElementState::Pressed;
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {

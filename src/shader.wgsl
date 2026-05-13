@@ -81,7 +81,10 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     let screen_pos_3d = p3d_scr + normal3d * model.side * uniforms.thickness;
     let clip_3d = vec4<f32>((screen_pos_3d / uniforms.resolution) * 2.0 - 1.0, p3d_clip.z / p3d_clip.w, 1.0);
 
-    out.clip_position = mix(clip_2d, clip_3d, uniforms.morph);
+    // Morphing progressif par distance (effet ruban)
+    let stagger = 0.5;
+    let local_morph = clamp((uniforms.morph * (1.0 + stagger)) - (model.pos.x / uniforms.max_dist) * stagger, 0.0, 1.0);
+    out.clip_position = mix(clip_2d, clip_3d, local_morph);
     out.ele = model.pos.y;
     out.uv = vec2<f32>(model.side, 0.0);
     out.world_pos = world_pos.xyz;
@@ -101,7 +104,10 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5, 1.0);
     let clip_3d = uniforms.view_proj * world_pos;
 
-    out.clip_position = mix(clip_2d, clip_3d, uniforms.morph);
+    // Morphing progressif par distance
+    let stagger = 0.5;
+    let local_morph = clamp((uniforms.morph * (1.0 + stagger)) - (model.pos.x / uniforms.max_dist) * stagger, 0.0, 1.0);
+    out.clip_position = mix(clip_2d, clip_3d, local_morph);
     out.ele = model.pos.y;
     out.uv = vec2<f32>(model.side, model.flag);
     out.world_pos = world_pos.xyz;
