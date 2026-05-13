@@ -84,6 +84,20 @@ console.log(`Found ${stages.length} stages.`);
 // --- Build all stages ---
 const allStagesData = [];
 for (const stage of stages) {
+    // 1. Calculate center and local projection
+    let sumLat = 0, sumLon = 0;
+    for (const pt of stage.points) {
+        sumLat += pt.lat;
+        sumLon += pt.lon;
+    }
+    const latCenter = sumLat / stage.points.length;
+    const lonCenter = sumLon / stage.points.length;
+
+    // Meters per degree approximation
+    const rad = Math.PI / 180;
+    const m_per_lat = 111320.0;
+    const m_per_lon = 111320.0 * Math.cos(latCenter * rad);
+
     let totalDist = 0;
     let lastCoord = null;
     let profilePoints = [];
@@ -91,7 +105,11 @@ for (const stage of stages) {
         if (lastCoord) {
             totalDist += haversineDistance(lastCoord.lat, lastCoord.lon, pt.lat, pt.lon);
         }
-        profilePoints.push({ dist: totalDist, ele: pt.ele });
+        // Local X, Y in meters
+        const lx = (pt.lon - lonCenter) * m_per_lon;
+        const ly = (pt.lat - latCenter) * m_per_lat;
+        
+        profilePoints.push({ dist: totalDist, ele: pt.ele, lx, ly });
         lastCoord = pt;
     }
 
@@ -103,8 +121,19 @@ for (const stage of stages) {
         const p = profilePoints[j];
         const pr = j > 0 ? profilePoints[j - 1] : p;
         const nx = j < n - 1 ? profilePoints[j + 1] : p;
-        vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, 1.0);
-        vertices.push(p.dist, p.ele, pr.dist, pr.ele, nx.dist, nx.ele, -1.0);
+
+        // Structure per vertex: 13 floats
+        // [dist, ele, lx, ly] x 3 (current, prev, next) + side
+        const pushV = (side) => {
+            vertices.push(p.dist, p.ele, p.lx, p.ly);
+            vertices.push(pr.dist, pr.ele, pr.lx, pr.ly);
+            vertices.push(nx.dist, nx.ele, nx.lx, nx.ly);
+            vertices.push(side);
+        };
+
+        pushV(1.0);
+        pushV(-1.0);
+
         if (j < n - 1) {
             const b = r_v_offset;
             indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
