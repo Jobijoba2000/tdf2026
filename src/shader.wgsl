@@ -169,9 +169,9 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Mur en jaune doré sombre/ambré (visible et premium)
-    let amber_base = vec3<f32>(0.4, 0.3, 0.05);
-    let amber_top = vec3<f32>(0.7, 0.55, 0.1);
+    // Mur en jaune doré sombre/ambré (visible et premium) - Un peu plus assombri
+    let amber_base = vec3<f32>(0.32, 0.24, 0.04);
+    let amber_top = vec3<f32>(0.55, 0.44, 0.08);
     let color = mix(amber_base, amber_top, in.uv.x); 
     return vec4<f32>(color, 1.0);
 }
