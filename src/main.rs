@@ -1407,8 +1407,10 @@ fn main() {
                     if state.view_mode == 1 {
                         if state.right_mouse_pressed {
                             // Rotation with Right Click
-                            state.camera_angle[1] += (dx as f32) * 0.005; 
-                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * 0.005).clamp(0.0, 1.6); 
+                            let rel_scale = (state.pos_scale / state.initial_scale) as f32;
+                            let sensitivity = 0.005 / rel_scale.max(1.0);
+                            state.camera_angle[1] += (dx as f32) * sensitivity; 
+                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.6); 
                         } else if state.mouse_pressed {
                             // Panning in 3D with Left Click
                             state.camera_offset[0] += dx as f32;
