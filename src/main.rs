@@ -26,12 +26,12 @@ struct PolyVertex {
     pos: [f32; 4], // x, y, lx, ly
     side: f32,     // 1.0 for top, 0.0 for bottom
     flag: f32,
-    _pad: [f32; 2], // Pad to 32 bytes (aligned)
+    normal: [f32; 2], // Normal in LX/LY plane
 }
 
 impl PolyVertex {
     fn new(pos: [f32; 4], side: f32) -> Self {
-        Self { pos, side, flag: 0.0, _pad: [0.0; 2] }
+        Self { pos, side, flag: 0.0, normal: [0.0, 0.0] }
     }
 }
 
@@ -61,7 +61,9 @@ struct Uniforms {
     y_min: f32,              // 128-132
     y_max: f32,              // 132-136
     rel_scale: f32,          // 136-140
-    _pad: [f32; 1],          // 140-144
+    camera_tilt: f32,        // 140-144
+    camera_heading: f32,     // 144-148
+    _pad: [f32; 3],          // 148-160 (align to 16 bytes)
 }
 
 struct ZoomAnimation {
@@ -386,7 +388,7 @@ impl<'a> State<'a> {
         let axes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 144, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 160, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let _sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
@@ -873,36 +875,77 @@ impl<'a> State<'a> {
 
         let mut poly_vertices = Vec::new();
         let mut poly_indices = Vec::new();
+
+        // Pre-calculate smooth normals for the track
+        let mut normals = Vec::with_capacity(self.profile_points.len());
+        for i in 0..self.profile_points.len() {
+            let lx = active_stage.vertices[i * 26 + 2];
+            let ly = active_stage.vertices[i * 26 + 3];
+            
+            let mut n = [0.0, 0.0];
+            let mut count = 0;
+            
+            if i > 0 {
+                let lx_p = active_stage.vertices[(i-1) * 26 + 2];
+                let ly_p = active_stage.vertices[(i-1) * 26 + 3];
+                let dx = lx - lx_p;
+                let dy = ly - ly_p;
+                let len = (dx*dx + dy*dy).sqrt().max(1e-6);
+                n[0] += -dy/len;
+                n[1] += dx/len;
+                count += 1;
+            }
+            if i < self.profile_points.len() - 1 {
+                let lx_n = active_stage.vertices[(i+1) * 26 + 2];
+                let ly_n = active_stage.vertices[(i+1) * 26 + 3];
+                let dx = lx_n - lx;
+                let dy = ly_n - ly;
+                let len = (dx*dx + dy*dy).sqrt().max(1e-6);
+                n[0] += -dy/len;
+                n[1] += dx/len;
+                count += 1;
+            }
+            
+            if count > 0 {
+                let mag = (n[0]*n[0] + n[1]*n[1]).sqrt().max(1e-6);
+                n[0] /= mag;
+                n[1] /= mag;
+            } else {
+                n = [1.0, 0.0];
+            }
+            normals.push(n);
+        }
+
+        // Smoothing pass ultra-large (window de 81 points) pour supprimer tout jitter de précision
+        let mut smooth_normals = Vec::with_capacity(normals.len());
+        let window_size = 40; 
+        for i in 0..normals.len() {
+            let mut sn = [0.0, 0.0];
+            for j in -window_size..=window_size {
+                let idx = (i as i32 + j).clamp(0, normals.len() as i32 - 1) as usize;
+                sn[0] += normals[idx][0];
+                sn[1] += normals[idx][1];
+            }
+            let slen = (sn[0]*sn[0] + sn[1]*sn[1]).sqrt().max(1e-6);
+            smooth_normals.push([sn[0]/slen, sn[1]/slen]);
+        }
+
+        let mut count = 0;
         for i in 0..self.profile_points.len() {
             let p = self.profile_points[i];
             let lx = active_stage.vertices[i * 26 + 2];
             let ly = active_stage.vertices[i * 26 + 3];
+            let n = smooth_normals[i];
 
-            // Turn detection
-            let mut turn_intensity = 0.0;
-            if i > 0 && i < self.profile_points.len() - 1 {
-                let lx_p = active_stage.vertices[(i-1) * 26 + 2];
-                let ly_p = active_stage.vertices[(i-1) * 26 + 3];
-                let lx_n = active_stage.vertices[(i+1) * 26 + 2];
-                let ly_n = active_stage.vertices[(i+1) * 26 + 3];
-                
-                let v1 = [lx - lx_p, ly - ly_p];
-                let v2 = [lx_n - lx, ly_n - ly];
-                let mag1 = (v1[0]*v1[0] + v1[1]*v1[1]).sqrt().max(0.001);
-                let mag2 = (v2[0]*v2[0] + v2[1]*v2[1]).sqrt().max(0.001);
-                let dot = (v1[0]*v2[0] + v1[1]*v2[1]) / (mag1 * mag2);
-                let angle = dot.clamp(-1.0, 1.0).acos();
-                if angle > 0.05 { // ~3 degrees
-                    turn_intensity = (angle * 5.0).min(1.0);
-                }
-            }
+            poly_vertices.push(PolyVertex { pos: [p[0], p[1], lx, ly], side: 1.0, flag: 0.0, normal: n });
+            poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min, lx, ly], side: 0.0, flag: 0.0, normal: n }); 
+            count += 1;
+        }
 
-            poly_vertices.push(PolyVertex { pos: [p[0], p[1], lx, ly], side: 1.0, flag: 0.0, _pad: [turn_intensity, 0.0] });
-            poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min, lx, ly], side: 0.0, flag: 0.0, _pad: [turn_intensity, 0.0] }); 
-            if i < self.profile_points.len() - 1 {
-                let b = (i * 2) as u32;
-                poly_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
-            }
+
+        for i in 0..count - 1 {
+            let b = (i * 2) as u32;
+            poly_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
         }
         self.poly_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Poly Vertex Buffer"), size: (poly_vertices.len() * 32) as u64,
@@ -1104,7 +1147,9 @@ impl<'a> State<'a> {
             y_min,
             y_max: y_min + delta_e_displayed as f32,
             rel_scale: capped_rel_scale,
-            _pad: [0.0; 1],
+            camera_tilt: self.camera_angle[0],
+            camera_heading: self.camera_angle[1],
+            _pad: [0.0; 3],
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
