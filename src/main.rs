@@ -507,7 +507,7 @@ impl<'a> State<'a> {
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             current_morph: 0.0, target_morph: 0.0, view_mode: 0, ctrl_pressed: false,
             camera_angle: [0.5, 0.0],
-            camera_offset: [350.0 + ((size.width as f32 - 350.0) * 0.5), size.height as f32 * 0.4],
+            camera_offset: [350.0 + ((size.width as f32 - 350.0) * 0.5), size.height as f32 * 0.5],
             stage_center: [0.0, 0.0],
             animation: None, morph_animation: None, sidebar_animation: None,
             fa, stages, selected_stage_idx: 0,
@@ -853,7 +853,7 @@ impl<'a> State<'a> {
         let fit_scale = (rpw * 0.7) / stage_size;
         self.pos_scale = fit_scale as f64;
         self.initial_scale = fit_scale as f64;
-        self.camera_offset = [350.0 + rpw * 0.5, self.size.height as f32 * 0.4];
+        self.camera_offset = [350.0 + rpw * 0.5, self.size.height as f32 * 0.5];
 
         self.pos_translate = [350.0 + (rpw * 0.1) as f64, (self.size.height as f64) * 0.25];
 
@@ -1075,13 +1075,8 @@ impl<'a> State<'a> {
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
         // Commencer à 0m si max_ele rentre dans la plage affichée
-        let y_min = if self.max_ele <= delta_e_displayed as f32 {
-            0.0
-        } else {
-            let padding = (delta_e_displayed as f32) * 0.1;
-            (self.min_ele - padding).max(0.0)
-        };
-        let _y_max = y_min + delta_e_displayed as f32;
+        let y_min = 0.0;
+        let delta_e_displayed = self.max_ele as f64;
 
         // Limiter le graphique pour qu'il ne monte pas dans le header (top - 260.0)
         if self.pos_translate[1] > (self.size.height as f64 - 260.0) {
@@ -1410,7 +1405,7 @@ fn main() {
                             let rel_scale = (state.pos_scale / state.initial_scale) as f32;
                             let sensitivity = 0.005 / rel_scale.max(1.0);
                             state.camera_angle[1] += (dx as f32) * sensitivity; 
-                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.6); 
+                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.5708); 
                         } else if state.mouse_pressed {
                             // Panning in 3D with Left Click
                             state.camera_offset[0] += dx as f32;

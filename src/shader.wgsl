@@ -130,7 +130,7 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     let p2d_scr = project_2d(model.pos.x, model.pos.y); // Use distance, elevation for 2D profile
     let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, 0.51, 1.0);
 
-    // Position 3D - Reduced exaggeration (0.5x)
+    // Position 3D - Reduced exaggeration (0.5x) - Grounded at Z=0
     let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5, 1.0);
     let clip_3d = uniforms.view_proj * world_pos;
 
