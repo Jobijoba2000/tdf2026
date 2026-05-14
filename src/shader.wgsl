@@ -13,7 +13,11 @@ struct Uniforms {
     y_min: f32,                // 128-132
     y_max: f32,                // 132-136
     rel_scale: f32,            // 136-140
-    _pad: f32,                 // 140-144
+    camera_tilt: f32,          // 140-144
+    camera_heading: f32,       // 144-148
+    _pad0: f32,                // 148-152
+    _pad1: f32,                // 152-156
+    _pad2: f32,                // 156-160
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -29,7 +33,7 @@ struct PolyVertexInput {
     @location(0) pos: vec4<f32>,   // x, y, lx, ly
     @location(1) side: f32,        // 1.0 for top, 0.0 for bottom
     @location(2) flag: f32,
-    @location(3) extra: vec2<f32>,
+    @location(3) normal: vec2<f32>,
 };
 
 struct VertexOutput {
@@ -39,6 +43,7 @@ struct VertexOutput {
     @location(2) world_pos: vec3<f32>,
     @location(3) dist: f32,
     @location(4) morph: f32,
+    @location(5) normal: vec3<f32>,
 };
 
 fn project_2d(dist: f32, ele: f32) -> vec2<f32> {
@@ -90,6 +95,7 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     out.world_pos = world_pos.xyz;
     out.dist = model.pos.x;
     out.morph = local_morph;
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
     return out;
 }
 
@@ -112,6 +118,7 @@ fn vs_axes(model: VertexInput) -> VertexOutput {
     out.uv = vec2<f32>(0.0, 0.0);
     out.world_pos = vec3<f32>(0.0, 0.0, 0.0);
     out.dist = 0.0;
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
     return out;
 }
 
@@ -136,6 +143,7 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     out.world_pos = world_pos.xyz;
     out.dist = model.pos.x;
     out.morph = local_morph;
+    out.normal = vec3<f32>(model.normal, 0.0);
     return out;
 }
 
@@ -149,6 +157,7 @@ fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
     );
     out.uv = vec2<f32>(0.0, 0.0);
     out.morph = uniforms.morph;
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
     return out;
 }
 
@@ -166,14 +175,39 @@ fn fs_header_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.2, 0.2, 0.05, 0.8);
 }
-
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Mur en jaune doré sombre/ambré (visible et premium) - Un peu plus assombri
-    let amber_base = vec3<f32>(0.32, 0.24, 0.04);
-    let amber_top = vec3<f32>(0.55, 0.44, 0.08);
-    let color = mix(amber_base, amber_top, in.uv.x); 
-    return vec4<f32>(color, 1.0);
+    // On utilise un jaune un peu plus sombre et mat (70%) pour le mur pour que le tracé du haut ressorte mieux
+    let yellow = uniforms.color.rgb * 0.7;
+    
+    // DIRECTION DE LA LUMIÈRE (Devant-Gauche)
+    let light_dir = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
+    
+    // 1. NORMALE PIVOTÉE (Pour que ça réagisse à la rotation)
+    let raw_normal = normalize(in.normal);
+    let h = uniforms.camera_heading;
+    let cos_h = cos(h);
+    let sin_h = sin(h);
+    let rotated_normal = vec3<f32>(
+        raw_normal.x * cos_h - raw_normal.y * sin_h,
+        raw_normal.x * sin_h + raw_normal.y * cos_h,
+        0.0
+    );
+    
+    // 2. ÉCLAIRAGE DE BASE
+    let diff = max(dot(rotated_normal, light_dir), 0.0);
+    let ambient = 0.45;
+    
+    // 3. HALO DE SÉPARATION SUBTIL (Dark Glow très fin)
+    // On réduit l'épaisseur à 3% et on empêche le noir total (on garde 80% de lumière minimum)
+    let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
+    
+    // On combine l'éclairage et on applique le halo
+    let lighting = (ambient + diff * 0.55) * border_glow;
+    
+    let final_lighting = mix(1.0, lighting, in.morph);
+    
+    return vec4<f32>(yellow * final_lighting, 1.0);
 }
 
 @fragment

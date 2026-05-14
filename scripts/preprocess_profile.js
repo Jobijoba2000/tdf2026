@@ -23,8 +23,8 @@ function haversineDistance(lat1, lon1, lat2, lon2) {
     const deltaLambda = (lon2 - lon1) * rad;
 
     const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
-              Math.cos(phi1) * Math.cos(phi2) *
-              Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+        Math.cos(phi1) * Math.cos(phi2) *
+        Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     return R * c;
@@ -39,17 +39,17 @@ let stages = [];
 
 while ((match = trkRegex.exec(gpxData)) !== null) {
     const trkContent = match[0];
-    
+
     const nameMatch = trkContent.match(/<name>(.*?)<\/name>/);
     const name = nameMatch ? nameMatch[1].replace('<![CDATA[', '').replace(']]>', '') : "Unknown";
-    
+
     const descMatch = trkContent.match(/<desc>([\s\S]*?)<\/desc>/);
     let start = "Unknown", finish = "Unknown", date = "Unknown";
     if (descMatch) {
         const desc = descMatch[1].replace('<![CDATA[', '').replace(']]>', '');
         const lines = desc.split('\n');
         if (lines[0]) {
-            const cities = lines[0].split(' > ');
+            const cities = lines[0].split(/\s*>\s*/);
             start = cities[0] || "Unknown";
             finish = cities[1] || "Unknown";
         }
@@ -60,20 +60,20 @@ while ((match = trkRegex.exec(gpxData)) !== null) {
 
     const ptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)">[\s\S]*?<ele>([^<]+)<\/ele>[\s\S]*?<\/trkpt>/g;
     let ptMatch;
-    
+
     let points = [];
     while ((ptMatch = ptRegex.exec(trkContent)) !== null) {
         const lat = parseFloat(ptMatch[1]);
         const lon = parseFloat(ptMatch[2]);
         const ele = parseFloat(ptMatch[3]);
-        
+
         if (ele > maxGlobalEle) {
             maxGlobalEle = ele;
         }
-        
+
         points.push({ lat, lon, ele });
     }
-    
+
     if (points.length > 0) {
         stages.push({ name, start, finish, date, points });
     }
@@ -108,7 +108,7 @@ for (const stage of stages) {
         // Local X, Y in meters
         const lx = (pt.lon - lonCenter) * m_per_lon;
         const ly = (pt.lat - latCenter) * m_per_lat;
-        
+
         profilePoints.push({ dist: totalDist, ele: pt.ele, lx, ly });
         lastCoord = pt;
     }
@@ -212,18 +212,18 @@ for (const s of allStagesData) {
     writeStr(s.start);
     writeStr(s.finish);
     writeStr(s.date);
-    
+
     finalBuf.writeFloatLE(s.totalDist, offset); offset += 4;
     finalBuf.writeFloatLE(s.maxEle, offset); offset += 4;
     finalBuf.writeFloatLE(s.minEle, offset); offset += 4;
-    
+
     for (let i = 0; i < 60; i++) {
         finalBuf.writeFloatLE(s.sparkline[i], offset); offset += 4;
     }
-    
+
     finalBuf.writeUInt32LE(s.vertices.length, offset); offset += 4;
     finalBuf.writeUInt32LE(s.indices.length, offset); offset += 4;
-    
+
     Buffer.from(s.vertices.buffer).copy(finalBuf, offset); offset += s.vertices.byteLength;
     Buffer.from(s.indices.buffer).copy(finalBuf, offset); offset += s.indices.byteLength;
 }
