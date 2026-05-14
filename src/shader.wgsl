@@ -218,7 +218,7 @@ fn fs_yellow(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return uniforms.color; // Jaune vif TDF
+    return vec4<f32>(1.0, 1.0, 1.0, 1.0); // Blanc pur
 }
 
 @fragment

@@ -1403,7 +1403,7 @@ fn main() {
                         if state.right_mouse_pressed {
                             // Rotation with Right Click
                             let rel_scale = (state.pos_scale / state.initial_scale) as f32;
-                            let sensitivity = 0.005 / rel_scale.max(1.0);
+                            let sensitivity = 0.005 / (rel_scale.max(1.0).sqrt());
                             state.camera_angle[1] += (dx as f32) * sensitivity; 
                             state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.5708); 
                         } else if state.mouse_pressed {
