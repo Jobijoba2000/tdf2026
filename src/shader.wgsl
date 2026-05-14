@@ -203,9 +203,10 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
     
     // On combine l'éclairage et on applique le halo
-    let lighting = (ambient + diff * 0.55) * border_glow;
+    let lighting = (ambient + diff * 0.6) * border_glow;
     
-    let final_lighting = mix(1.0, lighting, in.morph);
+    // On assombrit la 2D (0.7) par rapport à la 3D (lighting complet)
+    let final_lighting = mix(0.7, lighting, in.morph);
     
     return vec4<f32>(yellow * final_lighting, 1.0);
 }
