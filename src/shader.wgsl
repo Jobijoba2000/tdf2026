@@ -15,8 +15,8 @@ struct Uniforms {
     rel_scale: f32,            // 136-140
     camera_tilt: f32,          // 140-144
     camera_heading: f32,       // 144-148
-    _pad0: f32,                // 148-152
-    _pad1: f32,                // 152-156
+    global_center_x: f32,      // 148-152
+    global_center_y: f32,      // 152-156
     _pad2: f32,                // 156-160
 };
 
@@ -419,4 +419,49 @@ fn fs_dot(in: TextVertexOutput) -> @location(0) vec4<f32> {
     let dist = length(in.uv);
     if (dist > 1.0) { discard; }
     return vec4<f32>(1.0, 1.0, 1.0, smoothstep(1.0, 0.8, dist));
+}
+
+struct GlobalVertexInput {
+    @location(0) pos: vec2<f32>,
+    @location(1) prev: vec2<f32>,
+    @location(2) next: vec2<f32>,
+    @location(3) side: f32,
+    @location(4) color: f32,
+};
+
+struct GlobalVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: f32,
+};
+
+@vertex
+fn vs_global(model: GlobalVertexInput) -> GlobalVertexOutput {
+    var out: GlobalVertexOutput;
+    
+    let p_model = vec4<f32>(model.pos.x - uniforms.global_center_x, model.pos.y - uniforms.global_center_y, 0.5, 1.0);
+    let prev_model = vec4<f32>(model.prev.x - uniforms.global_center_x, model.prev.y - uniforms.global_center_y, 0.5, 1.0);
+    let next_model = vec4<f32>(model.next.x - uniforms.global_center_x, model.next.y - uniforms.global_center_y, 0.5, 1.0);
+    
+    let p_clip = uniforms.view_proj * p_model;
+    let prev_clip = uniforms.view_proj * prev_model;
+    let next_clip = uniforms.view_proj * next_model;
+    
+    let p_scr = (p_clip.xy / p_clip.w + 1.0) * 0.5 * uniforms.resolution;
+    let prev_scr = (prev_clip.xy / prev_clip.w + 1.0) * 0.5 * uniforms.resolution;
+    let next_scr = (next_clip.xy / next_clip.w + 1.0) * 0.5 * uniforms.resolution;
+    
+    let dir = normalize(next_scr - prev_scr);
+    let normal = vec2<f32>(-dir.y, dir.x);
+    
+    let thick = uniforms.thickness * 0.5;
+    let screen_pos = p_scr + normal * model.side * thick;
+    
+    out.clip_position = vec4<f32>((screen_pos / uniforms.resolution) * 2.0 - 1.0, p_clip.z / p_clip.w, 1.0);
+    out.color = model.color;
+    return out;
+}
+
+@fragment
+fn fs_global(in: GlobalVertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, 1.0, 1.0, 1.0);
 }

@@ -63,7 +63,9 @@ struct Uniforms {
     rel_scale: f32,          // 136-140
     camera_tilt: f32,        // 140-144
     camera_heading: f32,     // 144-148
-    _pad: [f32; 3],          // 148-160 (align to 16 bytes)
+    global_center_x: f32,    // 148-152
+    global_center_y: f32,    // 152-156
+    _pad: f32,               // 156-160 (align to 16 bytes)
 }
 
 struct ZoomAnimation {
@@ -81,6 +83,60 @@ struct ScrollAnimation {
     duration: Duration,
     start_y: f32,
     target_y: f32,
+}
+
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct GlobalVertex {
+    pos: [f32; 2],
+    prev: [f32; 2],
+    next: [f32; 2],
+    side: f32,
+    color: f32,
+}
+impl GlobalVertex {
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GlobalVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 16, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 24, shader_location: 3, format: wgpu::VertexFormat::Float32 },
+                wgpu::VertexAttribute { offset: 28, shader_location: 4, format: wgpu::VertexFormat::Float32 },
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GlobalViewState {
+    Inactive,
+    MorphingToTopDown,
+    Swapped,
+    ZoomingOut,
+    FullyGlobal,
+    ZoomingIn,
+    MorphingTo2D,
+}
+
+struct CameraAnimation {
+    start_time: std::time::Instant,
+    duration: std::time::Duration,
+    start_angle: [f32; 2],
+    target_angle: [f32; 2],
+    start_offset: [f32; 2],
+    target_offset: [f32; 2],
+}
+struct GlobalZoomAnimation {
+    start_time: std::time::Instant,
+    duration: std::time::Duration,
+    start_scale: f64,
+    target_scale: f64,
+    start_center: [f32; 2],
+    target_center: [f32; 2],
 }
 
 struct Stage {
@@ -128,6 +184,7 @@ struct State<'a> {
     dot_render_pipeline: wgpu::RenderPipeline,
     header_render_pipeline: wgpu::RenderPipeline,
     axes_render_pipeline: wgpu::RenderPipeline,
+    global_render_pipeline: wgpu::RenderPipeline,
 
     // Buffers & Resources
     uniform_bind_group: wgpu::BindGroup,
@@ -152,6 +209,8 @@ struct State<'a> {
     header_text_buffer: wgpu::Buffer,
     header_bg_buffer: wgpu::Buffer,
     header_border_buffer: wgpu::Buffer,
+    global_vertex_buffer: wgpu::Buffer,
+    global_index_buffer: wgpu::Buffer,
 
     // Metadata
     num_indices: u32,
@@ -164,6 +223,7 @@ struct State<'a> {
     num_sidebar_text_vertices: u32,
     num_header_text_vertices: u32,
     num_header_border_vertices: u32,
+    global_index_count: u32,
 
     // State
     profile_points: Vec<[f32; 2]>,
@@ -206,6 +266,9 @@ struct State<'a> {
     slope_result: Option<(f32, f32, f32)>,
 
     hover_stage_idx: Option<usize>,
+    global_view_state: GlobalViewState,
+    global_zoom_animation: Option<GlobalZoomAnimation>,
+    camera_animation: Option<CameraAnimation>,
 }
 
 
@@ -412,6 +475,64 @@ impl<'a> State<'a> {
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor { label: Some("Depth Texture"), size: wgpu::Extent3d { width: config.width, height: config.height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Depth32Float, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        use wgpu::util::DeviceExt;
+
+        let global_data = std::fs::read("data/vue_globale.bin").expect("Failed to load vue_globale.bin");
+        let mut global_offset = 0;
+        let global_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let global_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let global_vertices_size = (global_num_vertices * 32) as usize;
+        let global_vertices = &global_data[global_offset..global_offset+global_vertices_size]; global_offset += global_vertices_size;
+        let global_indices_size = (global_index_count * 4) as usize;
+        let global_indices = &global_data[global_offset..global_offset+global_indices_size];
+        
+        let global_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Vertex Buffer"),
+            contents: global_vertices,
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let global_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Index Buffer"),
+            contents: global_indices,
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let global_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Global Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_global",
+                buffers: &[GlobalVertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_global",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[wgpu::VertexBufferLayout { array_stride: 52, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_main", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState { constant: -1000, slope_scale: -1.0, clamp: 0.0 } }), multisample: wgpu::MultisampleState::default(), multiview: None });
         let poly_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_poly", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32, 3 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_poly", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() }, depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }), multisample: wgpu::MultisampleState::default(), multiview: None });
@@ -499,13 +620,13 @@ impl<'a> State<'a> {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, reticule_render_pipeline,
-            dot_render_pipeline, header_render_pipeline, axes_render_pipeline,
+            dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             sidebar_bg_buffer, sidebar_text_buffer, sparkline_buffer, stage_borders_buffer,
-            selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer,
+            selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer, global_vertex_buffer, global_index_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
-            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0,
+            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count,
             profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
@@ -517,7 +638,7 @@ impl<'a> State<'a> {
             fa, stages, selected_stage_idx: 0,
             sidebar_scroll_y: 0.0, sidebar_target_scroll_y: 0.0,
             slope_start: None, slope_end: None, slope_result: None,
-            hover_stage_idx: None,
+            hover_stage_idx: None, global_view_state: GlobalViewState::Inactive, global_zoom_animation: None, camera_animation: None,
         };
 
         state.rebuild_ui();
@@ -1035,6 +1156,97 @@ impl<'a> State<'a> {
             }
             self.window.request_redraw();
         }
+
+
+        if let Some(anim) = &self.camera_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f64();
+            let duration = anim.duration.as_secs_f64();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 1.0_f64 - (1.0_f64 - t).powi(3);
+            
+            self.camera_angle[0] = anim.start_angle[0] + (anim.target_angle[0] - anim.start_angle[0]) * (eased_t as f32);
+            self.camera_angle[1] = anim.start_angle[1] + (anim.target_angle[1] - anim.start_angle[1]) * (eased_t as f32);
+            self.camera_offset[0] = anim.start_offset[0] + (anim.target_offset[0] - anim.start_offset[0]) * (eased_t as f32);
+            self.camera_offset[1] = anim.start_offset[1] + (anim.target_offset[1] - anim.start_offset[1]) * (eased_t as f32);
+            
+            if t >= 1.0 {
+                self.camera_animation = None;
+            }
+            self.window.request_redraw();
+        }
+
+        if self.global_view_state == GlobalViewState::MorphingTo2D {
+            if self.morph_animation.is_none() {
+                self.global_view_state = GlobalViewState::Inactive;
+            }
+        }
+
+        if self.global_view_state == GlobalViewState::MorphingToTopDown {
+
+            if self.morph_animation.is_none() {
+                self.global_view_state = GlobalViewState::Swapped;
+                let active_stage = &self.stages[self.selected_stage_idx];
+                let france_width = 1_200_000.0; 
+                let rpw = (self.size.width as f64) - 350.0;
+                let target_scale = rpw * 0.9 / france_width;
+                
+                let c_x = 352.0 + (rpw as f32) * 0.5;
+                let c_y = self.size.height as f32 * 0.5;
+                
+                let p_france_x = -active_stage.global_lx;
+                let p_france_y = -active_stage.global_ly;
+                
+                let target_offset_x = c_x - (target_scale as f32) * p_france_x;
+                let target_offset_y = c_y - (target_scale as f32) * p_france_y;
+                
+                self.global_zoom_animation = Some(GlobalZoomAnimation {
+                    start_time: std::time::Instant::now(),
+                    duration: std::time::Duration::from_millis(4000),
+                    start_scale: self.pos_scale,
+                    target_scale,
+                    start_center: [self.camera_offset[0], self.camera_offset[1]],
+                    target_center: [target_offset_x, target_offset_y],
+                });
+                self.global_view_state = GlobalViewState::ZoomingOut;
+            }
+        }
+        if let Some(anim) = &self.global_zoom_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f64();
+            let delay = 0.3;
+            let duration = anim.duration.as_secs_f64();
+            let t_raw = (elapsed / duration).min(1.0);
+            
+            let eased_t = if elapsed < delay {
+                0.0_f64
+            } else {
+                let t = ((elapsed - delay) / (duration - delay)).min(1.0);
+                // Septic Ease In-Out (Puissance 7) : démarrage et fin ultra-doux
+                if t < 0.5 { 64.0 * t.powi(7) } else { 1.0 - (-2.0 * t + 2.0).powi(7) / 2.0 }
+            };
+            
+            self.pos_scale = anim.start_scale + (anim.target_scale - anim.start_scale) * eased_t;
+            self.camera_offset[0] = (anim.start_center[0] + (anim.target_center[0] - anim.start_center[0]) * (eased_t as f32));
+            self.camera_offset[1] = (anim.start_center[1] + (anim.target_center[1] - anim.start_center[1]) * (eased_t as f32));
+            if t_raw >= 1.0 {
+                self.global_zoom_animation = None;
+                if self.global_view_state == GlobalViewState::ZoomingOut {
+                    self.global_view_state = GlobalViewState::FullyGlobal;
+                } else if self.global_view_state == GlobalViewState::ZoomingIn {
+                    self.global_view_state = GlobalViewState::MorphingTo2D;
+                    self.view_mode = 0;
+                    self.target_morph = 0.0;
+                    self.morph_animation = Some(MorphAnimation {
+                        start_time: std::time::Instant::now(),
+                        duration: std::time::Duration::from_millis(1400),
+                        start_morph: self.current_morph,
+                        target_morph: 0.0,
+                    });
+                    let rpw = (self.size.width as f64) - 350.0;
+                    self.pos_translate = [350.0 + rpw * 0.1, (self.size.height as f64 - 260.0) * 0.2];
+                }
+            }
+            self.window.request_redraw();
+        }
     }
 
     pub fn get_profile_at_mouse(&self) -> [f32; 2] {
@@ -1160,7 +1372,9 @@ impl<'a> State<'a> {
             rel_scale: capped_rel_scale,
             camera_tilt: self.camera_angle[0],
             camera_heading: self.camera_angle[1],
-            _pad: [0.0; 3],
+            global_center_x: self.stages[self.selected_stage_idx].global_lx,
+            global_center_y: self.stages[self.selected_stage_idx].global_ly,
+            _pad: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -1239,10 +1453,19 @@ impl<'a> State<'a> {
             pass.draw_indexed(0..self.num_poly_indices, 0, 0..1);
 
             // Draw Profile/Trace Stroke (always needed)
+            
             pass.set_pipeline(&self.render_pipeline);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..self.num_indices, 0, 0..1);
+
+            if self.global_view_state == GlobalViewState::Swapped || self.global_view_state == GlobalViewState::ZoomingOut || self.global_view_state == GlobalViewState::FullyGlobal || self.global_view_state == GlobalViewState::ZoomingIn {
+                pass.set_pipeline(&self.global_render_pipeline);
+                pass.set_vertex_buffer(0, self.global_vertex_buffer.slice(..));
+                pass.set_index_buffer(self.global_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.global_index_count, 0, 0..1);
+            }
+
 
             // Draw optional Axes (only in 2D Profile)
             if self.current_morph < 0.5 {
@@ -1367,7 +1590,76 @@ fn main() {
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: key, state: ElementState::Pressed, .. }, .. } => {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
+                    
+                    Key::Named(NamedKey::Enter) => {
+                        if state.global_view_state == GlobalViewState::Inactive {
+                            if state.view_mode == 0 {
+                                state.view_mode = 1;
+                                state.target_morph = 1.0;
+                                state.morph_animation = Some(MorphAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(1400),
+                                    start_morph: state.current_morph,
+                                    target_morph: 1.0,
+                                });
+                            }
+                            
+                            let rpw = (state.size.width as f32) - 352.0;
+                            let target_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
+                            
+                            state.camera_animation = Some(CameraAnimation {
+                                start_time: std::time::Instant::now(),
+                                duration: std::time::Duration::from_millis(1400),
+                                start_angle: state.camera_angle,
+                                target_angle: [0.0, 0.0],
+                                start_offset: state.camera_offset,
+                                target_offset,
+                            });
+                            
+                            state.global_view_state = GlobalViewState::MorphingToTopDown;
+                            state.rebuild_ui();
+                        }
+                    }
                     Key::Named(NamedKey::Space) => {
+                        if state.global_view_state != GlobalViewState::Inactive {
+                            if state.global_view_state == GlobalViewState::ZoomingIn || state.global_view_state == GlobalViewState::MorphingTo2D {
+                                return; // Ignore space while already exiting
+                            }
+                            
+                            if state.global_view_state == GlobalViewState::MorphingToTopDown {
+                                state.global_view_state = GlobalViewState::Inactive;
+                                state.camera_animation = None;
+                                state.view_mode = 0;
+                                state.target_morph = 0.0;
+                                let rpw = (state.size.width as f64) - 350.0;
+                                state.pos_translate = [350.0 + rpw * 0.1, (state.size.height as f64 - 260.0) * 0.2];
+                                state.morph_animation = Some(MorphAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(1400),
+                                    start_morph: state.current_morph,
+                                    target_morph: 0.0,
+                                });
+                            } else {
+                                state.global_view_state = GlobalViewState::ZoomingIn;
+                                let rpw = (state.size.width as f32) - 352.0;
+                                let graph_width = (rpw as f64) * 0.8;
+                                let target_scale = graph_width / (state.max_dist as f64);
+                                let c_x = 352.0 + rpw * 0.5;
+                                let c_y = state.size.height as f32 * 0.5;
+                                
+                                state.global_zoom_animation = Some(GlobalZoomAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(2500),
+                                    start_scale: state.pos_scale,
+                                    target_scale,
+                                    start_center: [state.camera_offset[0], state.camera_offset[1]],
+                                    target_center: [c_x, c_y],
+                                });
+                            }
+                            state.rebuild_ui();
+                            return;
+                        }
+
                         let target = if state.view_mode == 0 { 1.0 } else { 0.0 };
                         state.morph_animation = Some(MorphAnimation {
                             start_time: Instant::now(),
@@ -1415,7 +1707,7 @@ fn main() {
                     let dx = position.x - state.last_mouse_pos[0] as f64;
                     let dy = position.y - state.last_mouse_pos[1] as f64;
                     
-                    if state.view_mode == 1 {
+                    if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {
                         if state.right_mouse_pressed {
                             // Rotation with Right Click
                             let rel_scale = (state.pos_scale / state.initial_scale) as f32;
@@ -1489,9 +1781,10 @@ fn main() {
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
                 let zoom_in = amount > 0.0;
                 let factor = if zoom_in { 1.5_f64 } else { 1.0 / 1.5_f64 };
-                let target_scale = (state.pos_scale * factor).clamp(state.initial_scale, state.initial_scale * 500.0);
+                let min_scale = if state.global_view_state != GlobalViewState::Inactive { state.initial_scale / 5000.0 } else { state.initial_scale };
+                let target_scale = (state.pos_scale * factor).clamp(min_scale, state.initial_scale * 500.0);
 
-                if state.view_mode == 1 {
+                if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {
                     // === ZOOM 3D animé centré sur la souris ===
                     // screen_pt = world_rotated * scale + camera_offset
                     // Pour fixer le point sous la souris : camera_offset_new = mouse + (camera_offset - mouse) * new_scale/old_scale
