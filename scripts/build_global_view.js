@@ -1,11 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const earcut = require('earcut');
 
 const FRA_GEOJSON = path.join(__dirname, '../data/geojson/gadm41_FRA_0.geojson');
 const GPX_FILE = path.join(__dirname, '../data/gpx/tour-de-france-2026.gpx');
 const OUT_FILE = path.join(__dirname, '../data/vue_globale.bin');
 
-// Fixed Global Projection (Center of France)
 const GLOBAL_LAT = 46.5;
 const GLOBAL_LON = 2.5;
 const rad = Math.PI / 180;
@@ -18,64 +18,86 @@ function project(lat, lon) {
     return [lx, ly];
 }
 
-let allVertices = [];
-let allIndices = [];
-let vertexOffset = 0;
+let fillVertices = []; 
+let fillIndices = [];
+let fillVertexOffset = 0;
+
+let lineVertices = []; 
+let lineIndices = [];
+let lineVertexOffset = 0;
+
+function addFillPolygon(polygon) {
+    let data = [];
+    let holeIndices = [];
+    let currentOffset = 0;
+    
+    polygon.forEach((ring, i) => {
+        if (i > 0) holeIndices.push(currentOffset);
+        ring.forEach(coord => {
+            const p = project(coord[1], coord[0]);
+            data.push(p[0], p[1]);
+            currentOffset++;
+        });
+    });
+    
+    const triangles = (typeof earcut === 'function' ? earcut : earcut.default)(data, holeIndices, 2);
+    const base = fillVertexOffset;
+    for (let i = 0; i < data.length; i += 2) {
+        fillVertices.push(data[i], data[i+1]);
+    }
+    for (let i = 0; i < triangles.length; i++) {
+        fillIndices.push(base + triangles[i]);
+    }
+    fillVertexOffset += (data.length / 2);
+}
 
 function addLineStrip(points, color) {
     if (points.length < 2) return;
     
     let n = points.length;
+    let baseOffset = lineVertexOffset;
+    
     for (let j = 0; j < n; j++) {
         const p = points[j];
         const pr = j > 0 ? points[j - 1] : p;
         const nx = j < n - 1 ? points[j + 1] : p;
         
-        // 8 floats: pos.x, pos.y, prev.x, prev.y, next.x, next.y, side, color
-        const pushV = (side) => {
-            allVertices.push(p[0], p[1]);
-            allVertices.push(pr[0], pr[1]);
-            allVertices.push(nx[0], nx[1]);
-            allVertices.push(side);
-            allVertices.push(color);
-        };
-        
-        pushV(1.0);
-        pushV(-1.0);
+        // Vertices: pos.x, pos.y, prev.x, prev.y, next.x, next.y, side, color
+        lineVertices.push(p[0], p[1], pr[0], pr[1], nx[0], nx[1], 1.0, color);
+        lineVertices.push(p[0], p[1], pr[0], pr[1], nx[0], nx[1], -1.0, color);
         
         if (j < n - 1) {
-            const b = vertexOffset;
-            allIndices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+            let b = baseOffset + j * 2;
+            lineIndices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
         }
-        vertexOffset += 2;
     }
+    lineVertexOffset += n * 2;
 }
 
-// 1. Parse France boundaries
+// 1. France
 console.log("Parsing France GeoJSON...");
 const rawGeo = fs.readFileSync(FRA_GEOJSON, 'utf8');
 const parsed = JSON.parse(rawGeo);
 
 parsed.features.forEach(feature => {
-    if (feature.geometry.type === 'MultiPolygon') {
-        feature.geometry.coordinates.forEach(polygon => {
-            polygon.forEach(ring => {
-                let pts = ring.map(coord => project(coord[1], coord[0]));
-                addLineStrip(pts, 0.4); // Gris moyen pour la carte de france
-            });
-        });
-    } else if (feature.geometry.type === 'Polygon') {
-        feature.geometry.coordinates.forEach(ring => {
+    const geometry = feature.geometry;
+    const polygons = geometry.type === 'MultiPolygon' ? geometry.coordinates : [geometry.coordinates];
+    
+    polygons.forEach(polygon => {
+        // Remplissage
+        addFillPolygon(polygon);
+        
+        // Contours (STROKES)
+        polygon.forEach(ring => {
             let pts = ring.map(coord => project(coord[1], coord[0]));
-            addLineStrip(pts, 0.4);
+            addLineStrip(pts, 0.5); // Gris clair pour les côtes
         });
-    }
+    });
 });
 
-// 2. Parse GPX
+// 2. GPX Stages
 console.log("Parsing GPX stages...");
 const gpxData = fs.readFileSync(GPX_FILE, 'utf8');
-
 const trkRegex = /<trk>[\s\S]*?<\/trk>/g;
 let match;
 while ((match = trkRegex.exec(gpxData)) !== null) {
@@ -86,25 +108,25 @@ while ((match = trkRegex.exec(gpxData)) !== null) {
     while ((ptMatch = ptRegex.exec(trkContent)) !== null) {
         pts.push(project(parseFloat(ptMatch[1]), parseFloat(ptMatch[2])));
     }
-    // Blanc franc pour les étapes
-    addLineStrip(pts, 1.0);
+    if (pts.length > 0) {
+        addLineStrip(pts, 1.0); // Blanc pur pour les étapes
+    }
 }
 
-// Write to bin
 console.log("Writing to vue_globale.bin...");
-const buf = Buffer.alloc(8 + allVertices.length * 4 + allIndices.length * 4);
-buf.writeUInt32LE(allVertices.length / 8, 0); // Nombre de sommets complets
-buf.writeUInt32LE(allIndices.length, 4);
+const totalSize = 16 + (fillVertices.length * 4) + (fillIndices.length * 4) + (lineVertices.length * 4) + (lineIndices.length * 4);
+const buf = Buffer.alloc(totalSize);
 
-let offset = 8;
-for (let v of allVertices) {
-    buf.writeFloatLE(v, offset);
-    offset += 4;
-}
-for (let i of allIndices) {
-    buf.writeUInt32LE(i, offset);
-    offset += 4;
-}
+buf.writeUInt32LE(fillVertices.length / 2, 0);
+buf.writeUInt32LE(fillIndices.length, 4);
+buf.writeUInt32LE(lineVertices.length / 8, 8);
+buf.writeUInt32LE(lineIndices.length, 12);
+
+let offset = 16;
+for (let v of fillVertices) { buf.writeFloatLE(v, offset); offset += 4; }
+for (let i of fillIndices) { buf.writeUInt32LE(i, offset); offset += 4; }
+for (let v of lineVertices) { buf.writeFloatLE(v, offset); offset += 4; }
+for (let i of lineIndices) { buf.writeUInt32LE(i, offset); offset += 4; }
 
 fs.writeFileSync(OUT_FILE, buf);
-console.log("Done! Vertices:", allVertices.length / 8, "Indices:", allIndices.length);
+console.log("Done! Fill Verts:", fillVertices.length/2, "Lines Verts:", lineVertices.length/8);

@@ -185,6 +185,7 @@ struct State<'a> {
     header_render_pipeline: wgpu::RenderPipeline,
     axes_render_pipeline: wgpu::RenderPipeline,
     global_render_pipeline: wgpu::RenderPipeline,
+    global_fill_render_pipeline: wgpu::RenderPipeline,
 
     // Buffers & Resources
     uniform_bind_group: wgpu::BindGroup,
@@ -211,6 +212,8 @@ struct State<'a> {
     header_border_buffer: wgpu::Buffer,
     global_vertex_buffer: wgpu::Buffer,
     global_index_buffer: wgpu::Buffer,
+    global_fill_vertex_buffer: wgpu::Buffer,
+    global_fill_index_buffer: wgpu::Buffer,
 
     // Metadata
     num_indices: u32,
@@ -224,6 +227,7 @@ struct State<'a> {
     num_header_text_vertices: u32,
     num_header_border_vertices: u32,
     global_index_count: u32,
+    global_fill_index_count: u32,
 
     // State
     profile_points: Vec<[f32; 2]>,
@@ -479,22 +483,81 @@ impl<'a> State<'a> {
 
         let global_data = std::fs::read("data/vue_globale.bin").expect("Failed to load vue_globale.bin");
         let mut global_offset = 0;
-        let global_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
-        let global_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
-        let global_vertices_size = (global_num_vertices * 32) as usize;
-        let global_vertices = &global_data[global_offset..global_offset+global_vertices_size]; global_offset += global_vertices_size;
-        let global_indices_size = (global_index_count * 4) as usize;
-        let global_indices = &global_data[global_offset..global_offset+global_indices_size];
+        let fill_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let fill_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let line_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let line_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+
+        let fill_vertices_size = (fill_num_vertices * 8) as usize;
+        let fill_vertices = &global_data[global_offset..global_offset+fill_vertices_size]; global_offset += fill_vertices_size;
+        let fill_indices_size = (fill_index_count * 4) as usize;
+        let fill_indices = &global_data[global_offset..global_offset+fill_indices_size]; global_offset += fill_indices_size;
+
+        let line_vertices_size = (line_num_vertices * 32) as usize;
+        let line_vertices = &global_data[global_offset..global_offset+line_vertices_size]; global_offset += line_vertices_size;
+        let line_indices_size = (line_index_count * 4) as usize;
+        let line_indices = &global_data[global_offset..global_offset+line_indices_size];
         
+        let global_fill_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Fill Vertex Buffer"),
+            contents: fill_vertices,
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let global_fill_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Fill Index Buffer"),
+            contents: fill_indices,
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
         let global_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Global Vertex Buffer"),
-            contents: global_vertices,
+            contents: line_vertices,
             usage: wgpu::BufferUsages::VERTEX,
         });
         let global_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Global Index Buffer"),
-            contents: global_indices,
+            contents: line_indices,
             usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let global_fill_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Global Fill Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_global_fill",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: 8,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_global_fill",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2000, // Pousse loin derrière
+                    slope_scale: 1.0,
+                    clamp: 0.0,
+                },
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
         });
 
         let global_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -526,9 +589,13 @@ impl<'a> State<'a> {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 1000, // Pousse un peu moins loin que le remplissage
+                    slope_scale: 1.0,
+                    clamp: 0.0,
+                },
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
@@ -620,13 +687,14 @@ impl<'a> State<'a> {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, reticule_render_pipeline,
-            dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline,
+            dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             sidebar_bg_buffer, sidebar_text_buffer, sparkline_buffer, stage_borders_buffer,
             selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer, global_vertex_buffer, global_index_buffer,
+            global_fill_vertex_buffer, global_fill_index_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
-            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count,
+            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
             profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
@@ -1188,10 +1256,10 @@ impl<'a> State<'a> {
                 let active_stage = &self.stages[self.selected_stage_idx];
                 let france_width = 1_200_000.0; 
                 let rpw = (self.size.width as f64) - 350.0;
-                let target_scale = rpw * 0.9 / france_width;
+                let target_scale = rpw * 0.60 / france_width;
                 
                 let c_x = 352.0 + (rpw as f32) * 0.5;
-                let c_y = self.size.height as f32 * 0.5;
+                let c_y = self.size.height as f32 * 0.5 - 50.0; // Un peu plus haut pour laisser de la place au texte
                 
                 let p_france_x = -active_stage.global_lx;
                 let p_france_y = -active_stage.global_ly;
@@ -1460,6 +1528,13 @@ impl<'a> State<'a> {
             pass.draw_indexed(0..self.num_indices, 0, 0..1);
 
             if self.global_view_state == GlobalViewState::Swapped || self.global_view_state == GlobalViewState::ZoomingOut || self.global_view_state == GlobalViewState::FullyGlobal || self.global_view_state == GlobalViewState::ZoomingIn {
+                // 1. France Fill (#444)
+                pass.set_pipeline(&self.global_fill_render_pipeline);
+                pass.set_vertex_buffer(0, self.global_fill_vertex_buffer.slice(..));
+                pass.set_index_buffer(self.global_fill_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.global_fill_index_count, 0, 0..1);
+
+                // 2. Global Lines
                 pass.set_pipeline(&self.global_render_pipeline);
                 pass.set_vertex_buffer(0, self.global_vertex_buffer.slice(..));
                 pass.set_index_buffer(self.global_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1781,7 +1856,9 @@ fn main() {
                 let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f64, MouseScrollDelta::PixelDelta(p) => p.y / 60.0 };
                 let zoom_in = amount > 0.0;
                 let factor = if zoom_in { 1.5_f64 } else { 1.0 / 1.5_f64 };
-                let min_scale = if state.global_view_state != GlobalViewState::Inactive { state.initial_scale / 5000.0 } else { state.initial_scale };
+                let rpw = (state.size.width as f64) - 350.0;
+                let france_min_scale = rpw * 0.60 / 1_200_000.0;
+                let min_scale = if state.global_view_state != GlobalViewState::Inactive { france_min_scale } else { state.initial_scale };
                 let target_scale = (state.pos_scale * factor).clamp(min_scale, state.initial_scale * 500.0);
 
                 if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {

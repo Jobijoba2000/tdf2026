@@ -438,9 +438,9 @@ struct GlobalVertexOutput {
 fn vs_global(model: GlobalVertexInput) -> GlobalVertexOutput {
     var out: GlobalVertexOutput;
     
-    let p_model = vec4<f32>(model.pos.x - uniforms.global_center_x, model.pos.y - uniforms.global_center_y, 0.5, 1.0);
-    let prev_model = vec4<f32>(model.prev.x - uniforms.global_center_x, model.prev.y - uniforms.global_center_y, 0.5, 1.0);
-    let next_model = vec4<f32>(model.next.x - uniforms.global_center_x, model.next.y - uniforms.global_center_y, 0.5, 1.0);
+    let p_model = vec4<f32>(model.pos.x - uniforms.global_center_x, model.pos.y - uniforms.global_center_y, 0.0, 1.0);
+    let prev_model = vec4<f32>(model.prev.x - uniforms.global_center_x, model.prev.y - uniforms.global_center_y, 0.0, 1.0);
+    let next_model = vec4<f32>(model.next.x - uniforms.global_center_x, model.next.y - uniforms.global_center_y, 0.0, 1.0);
     
     let p_clip = uniforms.view_proj * p_model;
     let prev_clip = uniforms.view_proj * prev_model;
@@ -453,7 +453,7 @@ fn vs_global(model: GlobalVertexInput) -> GlobalVertexOutput {
     let dir = normalize(next_scr - prev_scr);
     let normal = vec2<f32>(-dir.y, dir.x);
     
-    let thick = uniforms.thickness * 0.5;
+    let thick = uniforms.thickness * 1.8;
     let screen_pos = p_scr + normal * model.side * thick;
     
     out.clip_position = vec4<f32>((screen_pos / uniforms.resolution) * 2.0 - 1.0, p_clip.z / p_clip.w, 1.0);
@@ -461,7 +461,19 @@ fn vs_global(model: GlobalVertexInput) -> GlobalVertexOutput {
     return out;
 }
 
+@vertex
+fn vs_global_fill(@location(0) pos: vec2<f32>) -> @builtin(position) vec4<f32> {
+    let p_model = vec4<f32>(pos.x - uniforms.global_center_x, pos.y - uniforms.global_center_y, 0.0, 1.0);
+    let p_clip = uniforms.view_proj * p_model;
+    return p_clip;
+}
+
 @fragment
 fn fs_global(in: GlobalVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+}
+
+@fragment
+fn fs_global_fill() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.26, 0.26, 0.26, 1.0); // #444
 }
