@@ -177,11 +177,8 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
-    // On utilise un jaune un peu plus sombre et mat (70%) pour le mur pour que le tracé du haut ressorte mieux
-    let yellow = uniforms.color.rgb * 0.7;
-    
-    // DIRECTION DE LA LUMIÈRE (Devant-Gauche)
-    let light_dir = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
+    // On augmente un peu la luminosité de base du jaune (de 0.7 à 0.8)
+    let yellow = uniforms.color.rgb * 0.8;
     
     // 1. NORMALE PIVOTÉE (Pour que ça réagisse à la rotation)
     let raw_normal = normalize(in.normal);
@@ -194,18 +191,25 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
         0.0
     );
     
-    // 2. ÉCLAIRAGE DE BASE
-    let diff = max(dot(rotated_normal, light_dir), 0.0);
-    let ambient = 0.45;
+    // 2. ÉCLAIRAGE MULTI-SOURCES BOOSTÉ
+    // Lumière principale (Key Light) : Devant-Gauche
+    let light_dir1 = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
+    let diff1 = max(dot(rotated_normal, light_dir1), 0.0);
     
-    // 3. HALO DE SÉPARATION SUBTIL (Dark Glow très fin)
-    // On réduit l'épaisseur à 3% et on empêche le noir total (on garde 80% de lumière minimum)
+    // Lumière de remplissage (Fill Light) : Arrière-Droite
+    let light_dir2 = normalize(vec3<f32>(0.8, -0.4, 0.3));
+    let diff2 = max(dot(rotated_normal, light_dir2), 0.0);
+    
+    // Ambient plus fort pour éviter le côté terne
+    let ambient = 0.5;
+    
+    // 3. HALO DE SÉPARATION SUBTIL
     let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
     
-    // On combine l'éclairage et on applique le halo
-    let lighting = (ambient + diff * 0.6) * border_glow;
+    // On combine avec des coefficients plus élevés : Ambient (0.5) + Key (0.6) + Fill (0.35)
+    let lighting = (ambient + diff1 * 0.6 + diff2 * 0.35) * border_glow;
     
-    // On assombrit la 2D (0.7) par rapport à la 3D (lighting complet)
+    // On assombrit la 2D (0.7) par rapport à la 3D
     let final_lighting = mix(0.7, lighting, in.morph);
     
     return vec4<f32>(yellow * final_lighting, 1.0);
