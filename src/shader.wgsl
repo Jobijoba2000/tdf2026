@@ -177,10 +177,10 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
-    // On augmente un peu la luminosité de base du jaune (de 0.7 à 0.8)
-    let yellow = uniforms.color.rgb * 0.8;
+    // Jaune équilibré
+    let yellow = uniforms.color.rgb * 0.75;
     
-    // 1. NORMALE PIVOTÉE (Pour que ça réagisse à la rotation)
+    // 1. NORMALE PIVOTÉE
     let raw_normal = normalize(in.normal);
     let h = uniforms.camera_heading;
     let cos_h = cos(h);
@@ -191,28 +191,42 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
         0.0
     );
     
-    // 2. ÉCLAIRAGE MULTI-SOURCES BOOSTÉ
-    // Lumière principale (Key Light) : Devant-Gauche
+    // 2. ÉCLAIRAGE MULTI-SOURCES (Équilibré pour le contraste)
     let light_dir1 = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
     let diff1 = max(dot(rotated_normal, light_dir1), 0.0);
-    
-    // Lumière de remplissage (Fill Light) : Arrière-Droite
     let light_dir2 = normalize(vec3<f32>(0.8, -0.4, 0.3));
     let diff2 = max(dot(rotated_normal, light_dir2), 0.0);
     
-    // Ambient plus fort pour éviter le côté terne
-    let ambient = 0.5;
+    // Ambient réduit pour donner plus de relief
+    let ambient = 0.35;
     
-    // 3. HALO DE SÉPARATION SUBTIL
+    // 3. EFFETS PREMIUM (Subtils)
+    let view_dir = normalize(vec3<f32>(0.0, 0.0, 1.0));
+    
+    // Spéculaire très fin
+    let half_dir = normalize(light_dir1 + view_dir);
+    let spec = pow(max(dot(rotated_normal, half_dir), 0.0), 64.0);
+    
+    // Fresnel très discret pour le contour
+    let fresnel = pow(1.0 - max(dot(rotated_normal, view_dir), 0.0), 5.0);
+    
+    // Gradient vertical doux
+    let height_factor = smoothstep(0.0, 600.0, in.world_pos.z);
+    let depth_grad = mix(0.9, 1.1, height_factor);
+    
+    // 4. COMBINAISON
     let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
     
-    // On combine avec des coefficients plus élevés : Ambient (0.5) + Key (0.6) + Fill (0.35)
-    let lighting = (ambient + diff1 * 0.6 + diff2 * 0.35) * border_glow;
+    // On combine l'éclairage (Key 40% + Fill 20%)
+    let lighting = (ambient + diff1 * 0.4 + diff2 * 0.2) * border_glow * depth_grad;
     
-    // On assombrit la 2D (0.7) par rapport à la 3D
     let final_lighting = mix(0.7, lighting, in.morph);
     
-    return vec4<f32>(yellow * final_lighting, 1.0);
+    // Éclat additif très léger (blancs)
+    let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
+    let final_color = yellow * final_lighting + vec3<f32>(shine);
+    
+    return vec4<f32>(final_color, 1.0);
 }
 
 @fragment
