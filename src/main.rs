@@ -481,7 +481,7 @@ impl<'a> State<'a> {
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         use wgpu::util::DeviceExt;
 
-        let global_data = std::fs::read("data/vue_globale.bin").expect("Failed to load vue_globale.bin");
+        let global_data = include_bytes!("../data/vue_globale.bin");
         let mut global_offset = 0;
         let fill_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
         let fill_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
