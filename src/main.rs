@@ -91,6 +91,8 @@ struct Stage {
     max_dist: f32,
     max_ele: f32,
     min_ele: f32,
+    global_lx: f32,
+    global_ly: f32,
     sparkline: Vec<f32>,
     vertices: Vec<f32>, // raw floats
     indices: Vec<u32>,
@@ -270,6 +272,8 @@ impl<'a> State<'a> {
             let max_dist = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
             let max_ele = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
             let min_ele = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let global_lx = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let global_ly = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
             
             let mut sparkline = Vec::with_capacity(60);
             for _ in 0..60 {
@@ -295,7 +299,7 @@ impl<'a> State<'a> {
             for j in (0..v_count).step_by(26) { // 2 vertices per point, 13 floats per vertex
                 profile_points.push([vertices[j], vertices[j+1]]);
             }
-            stages.push(Stage { name, start, finish, date, max_dist, max_ele, min_ele, sparkline, vertices, indices, profile_points });
+            stages.push(Stage { name, start, finish, date, max_dist, max_ele, min_ele, global_lx, global_ly, sparkline, vertices, indices, profile_points });
         }
 
         let selected_stage_idx = 0;

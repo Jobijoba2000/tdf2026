@@ -84,7 +84,13 @@ console.log(`Found ${stages.length} stages.`);
 // --- Build all stages ---
 const allStagesData = [];
 for (const stage of stages) {
-    // 1. Calculate center and local projection
+    // 1. Fixed Global Projection (Center of France)
+    const GLOBAL_LAT = 46.5;
+    const GLOBAL_LON = 2.5;
+    const rad = Math.PI / 180;
+    const m_per_lat = 111320.0;
+    const m_per_lon = 111320.0 * Math.cos(GLOBAL_LAT * rad);
+
     let sumLat = 0, sumLon = 0;
     for (const pt of stage.points) {
         sumLat += pt.lat;
@@ -93,10 +99,9 @@ for (const stage of stages) {
     const latCenter = sumLat / stage.points.length;
     const lonCenter = sumLon / stage.points.length;
 
-    // Meters per degree approximation
-    const rad = Math.PI / 180;
-    const m_per_lat = 111320.0;
-    const m_per_lon = 111320.0 * Math.cos(latCenter * rad);
+    // Global position of the stage center
+    const global_lx = (lonCenter - GLOBAL_LON) * m_per_lon;
+    const global_ly = (latCenter - GLOBAL_LAT) * m_per_lat;
 
     let totalDist = 0;
     let lastCoord = null;
@@ -105,7 +110,7 @@ for (const stage of stages) {
         if (lastCoord) {
             totalDist += haversineDistance(lastCoord.lat, lastCoord.lon, pt.lat, pt.lon);
         }
-        // Local X, Y in meters
+        // Local X, Y in meters, but using the FIXED global scale
         const lx = (pt.lon - lonCenter) * m_per_lon;
         const ly = (pt.lat - latCenter) * m_per_lat;
 
@@ -194,6 +199,7 @@ for (const s of allStagesData) {
     totalSize += 4 + Buffer.from(s.finish, 'utf8').length;
     totalSize += 4 + Buffer.from(s.date, 'utf8').length;
     totalSize += 4 + 4 + 4 + (60 * 4); // dist, maxEle, minEle, sparkline
+    totalSize += 4 + 4; // global_lx, global_ly
     totalSize += 4 + 4 + s.vertices.byteLength + s.indices.byteLength;
 }
 
@@ -216,6 +222,8 @@ for (const s of allStagesData) {
     finalBuf.writeFloatLE(s.totalDist, offset); offset += 4;
     finalBuf.writeFloatLE(s.maxEle, offset); offset += 4;
     finalBuf.writeFloatLE(s.minEle, offset); offset += 4;
+    finalBuf.writeFloatLE(s.global_lx, offset); offset += 4;
+    finalBuf.writeFloatLE(s.global_ly, offset); offset += 4;
 
     for (let i = 0; i < 60; i++) {
         finalBuf.writeFloatLE(s.sparkline[i], offset); offset += 4;
