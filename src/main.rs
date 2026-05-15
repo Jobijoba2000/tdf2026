@@ -925,7 +925,7 @@ impl<'a> State<'a> {
 
         // Smoothing pass ultra-large (window de 81 points) pour supprimer tout jitter de précision
         let mut smooth_normals = Vec::with_capacity(normals.len());
-        let window_size = 40; 
+        let window_size = 8; 
         for i in 0..normals.len() {
             let mut sn = [0.0, 0.0];
             for j in -window_size..=window_size {

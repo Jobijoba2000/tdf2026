@@ -220,7 +220,7 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     // On combine l'éclairage (Key 40% + Fill 20%)
     let lighting = (ambient + diff1 * 0.4 + diff2 * 0.2) * border_glow * depth_grad;
     
-    let final_lighting = mix(0.7, lighting, in.morph);
+    let final_lighting = mix(0.85, lighting, in.morph);
     
     // Éclat additif très léger (blancs)
     let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
