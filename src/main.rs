@@ -871,7 +871,14 @@ impl<'a> State<'a> {
         self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&active_stage.indices)); 
         self.num_indices = active_stage.indices.len() as u32;
 
-        let poly_y_min = 0.0;
+        let delta_e_displayed = self.max_dist * self.global_max_ratio_diff;
+        let y_min = if self.max_ele <= delta_e_displayed {
+            0.0
+        } else {
+            let padding = delta_e_displayed * 0.1;
+            (self.min_ele - padding).max(0.0)
+        };
+        let poly_y_min = y_min;
 
         let mut poly_vertices = Vec::new();
         let mut poly_indices = Vec::new();
@@ -1075,8 +1082,13 @@ impl<'a> State<'a> {
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
         
         // Commencer à 0m si max_ele rentre dans la plage affichée
-        let y_min = 0.0;
-        let delta_e_displayed = self.max_ele as f64;
+        let delta_e_displayed = self.max_dist as f64 * self.global_max_ratio_diff as f64;
+        let y_min = if self.max_ele <= delta_e_displayed as f32 {
+            0.0
+        } else {
+            let padding = delta_e_displayed as f32 * 0.1;
+            (self.min_ele - padding).max(0.0)
+        };
 
         // Limiter le graphique pour qu'il ne monte pas dans le header (top - 260.0)
         if self.pos_translate[1] > (self.size.height as f64 - 260.0) {

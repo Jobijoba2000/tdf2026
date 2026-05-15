@@ -68,9 +68,9 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     let clip_2d = vec4<f32>((screen_pos_2d / uniforms.resolution) * 2.0 - 1.0, 0.5, 1.0);
 
     // Position 3D (Trace) - Reduced exaggeration (0.5x) + Tiny offset to avoid Z-fighting
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
-    let prev_world = vec4<f32>(model.prev.z, model.prev.w, model.prev.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
-    let next_world = vec4<f32>(model.next.z, model.next.w, model.next.y * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    let prev_world = vec4<f32>(model.prev.z, model.prev.w, (model.prev.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    let next_world = vec4<f32>(model.next.z, model.next.w, (model.next.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
     
     let p3d_clip = uniforms.view_proj * world_pos;
     let prev3d_clip = uniforms.view_proj * prev_world;
@@ -131,7 +131,7 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, 0.51, 1.0);
 
     // Position 3D - Reduced exaggeration (0.5x) - Grounded at Z=0
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, model.pos.y * uniforms.y_stretch * 0.5, 1.0);
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5, 1.0);
     let clip_3d = uniforms.view_proj * world_pos;
 
     // Morphing progressif par distance
