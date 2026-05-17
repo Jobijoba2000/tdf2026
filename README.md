@@ -1,5 +1,9 @@
 # 🚴‍♂️ Tour de France 2026 — Visualiseur de Profils 2D/3D Interactif
 
+<p align="center">
+  <video src="data/video/TDF%202026%20-%20Profile%202026-05-17%2023-02-02.mp4" width="100%" controls autoplay loop muted></video>
+</p>
+
 Une application de bureau ultra-performante développée en **Rust**, permettant de visualiser de manière interactive les étapes du **Tour de France 2026**. Propulsée par **wgpu** (WebGPU pour Rust) et **glam**, elle offre un rendu graphique 3D en temps réel à 60 FPS avec des transitions animées fluides (morphing) et une interface utilisateur haut de gamme.
 
 ---
