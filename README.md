@@ -99,4 +99,4 @@ cargo run --release
 
 ### Interface & Boutons
 * **Bouton "3D"** (ou touche **Espace**) : Déclenche la transition morphing fluide entre le profil 2D et le modèle 3D extrudé de l'étape.
-* **Bouton "Global"** : Active ou désactive la vue d'ensemble de la carte de France.
+* **Bouton "Global"** (ou touche **Entrée**) : Active ou désactive la vue d'ensemble de la carte de France.

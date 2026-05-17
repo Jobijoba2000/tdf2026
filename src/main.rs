@@ -997,6 +997,15 @@ impl<'a> State<'a> {
             for i in 0..(pos_h.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos_h[i*2], pos_h[i*2+1]], uv: [uvs_h[i*2], uvs_h[i*2+1]], anchor: anchor_h, size: 0.4 });
             }
+
+            if self.global_view_state == GlobalViewState::Inactive {
+                let help_enter = "[Entrée] Voir la carte globale";
+                let (pos_e, uvs_e): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_enter);
+                let anchor_e = [self.size.width as f32 - 250.0, self.size.height as f32 - 75.0];
+                for i in 0..(pos_e.len() / 2) {
+                    header_text_vertices.push(TextVertex { pos: [pos_e[i*2], pos_e[i*2+1]], uv: [uvs_e[i*2], uvs_e[i*2+1]], anchor: anchor_e, size: 0.4 });
+                }
+            }
         }
         self.num_header_text_vertices = header_text_vertices.len() as u32;
         self.queue.write_buffer(&self.header_text_buffer, 0, bytemuck::cast_slice(&header_text_vertices));
@@ -1300,6 +1309,7 @@ impl<'a> State<'a> {
         if self.global_view_state == GlobalViewState::MorphingTo2D {
             if self.morph_animation.is_none() {
                 self.global_view_state = GlobalViewState::Inactive;
+                self.rebuild_ui();
             }
         }
 
