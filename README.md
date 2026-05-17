@@ -7,7 +7,7 @@ Une application de bureau ultra-performante développée en **Rust**, permettant
 ## 🌟 Fonctionnalités Principales
 
 * **Profils 2D Détaillés** : Affichage précis de la courbe d'altitude de chaque étape en fonction de sa distance.
-* **Calculateur de Pente Interactif** : Maintenez la touche **Ctrl** et faites un **clic gauche** sur le profil pour définir un point de départ, puis un autre Ctrl+clic pour le point d'arrivée : l'application calcule instantanément la distance, la différence d'altitude (dénivelé) et le pourcentage de la pente moyenne.
+* **Calculateur de Pente Interactif** : Maintenez la touche **Ctrl** et faites un **clic gauche** sur le profil pour définir un point de départ, puis un second Ctrl+clic pour le point d'arrivée : l'application trace instantanément une zone rouge de sélection et calcule le pourcentage moyen de la pente, la distance et le dénivelé. Pour annuler ou quitter ce mode à tout moment, effectuez un simple **clic droit** sur le profil.
 * **Morphing 2D ➡️ 3D** : Transition animée fluide passant d'une courbe de profil 2D à un tracé 3D extrudé et surélevé dans l'espace.
 * **Caméra 3D Libre** : Rotation, inclinaison et zoom ultra-fluides avec gestion de l'inertie physique pour une navigation naturelle.
 * **Carte Globale interactive** : Basculez sur la vue "France" pour afficher la carte entière du pays et le tracé géographique exact de toutes les étapes du Tour.
@@ -93,9 +93,9 @@ cargo run --release
   * En mode **3D** / **Global** : Faites tourner la caméra dans l'espace autour du profil ou de la carte de France.
 * **Molette de la souris** : Zoom avant / arrière au niveau du pointeur de la souris.
 * **Ctrl + Clic gauche sur le profil 2D** :
-  * Premier clic : Définit le point de départ de la mesure de pente (une ligne verticale jaune s'affiche).
-  * Deuxième clic : Définit le point d'arrivée. Affiche un encadré flottant avec la distance parcourue, le dénivelé et le pourcentage moyen de la pente.
-  * Troisième clic : Réinitialise l'outil de mesure de pente.
+  * Premier clic : Définit le point de départ de la mesure de pente (une ligne verticale blanche limitée au profil s'affiche).
+  * Deuxième clic : Définit le point d'arrivée. Affiche une zone de sélection rouge vif, deux délimiteurs verticaux blancs arrêtés pile au profil, et le résultat calculé de la pente sous forme de texte double-ligne centré (pourcentage en haut, dénivelé et distance 35% moins gros en bas).
+* **Clic droit sur le profil 2D** : Sort instantanément du mode de calcul de pente (réinitialise l'état, effaçant le tracé rouge, les lignes et les textes).
 
 ### Interface & Boutons
 * **Bouton "3D"** (ou touche **Espace**) : Déclenche la transition morphing fluide entre le profil 2D et le modèle 3D extrudé de l'étape.

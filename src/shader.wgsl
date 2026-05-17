@@ -17,7 +17,11 @@ struct Uniforms {
     camera_heading: f32,       // 144-148
     global_center_x: f32,      // 148-152
     global_center_y: f32,      // 152-156
-    _pad2: f32,                // 156-160
+    slope_x1: f32,             // 156-160
+    slope_x2: f32,             // 160-164
+    slope_y1: f32,             // 164-168
+    slope_y2: f32,             // 168-172
+    _pad2: f32,                // 172-176
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -128,7 +132,11 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     
     // Position 2D
     let p2d_scr = project_2d(model.pos.x, model.pos.y); // Use distance, elevation for 2D profile
-    let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, 0.51, 1.0);
+    var depth = 0.51;
+    if (model.flag > 0.5) {
+        depth = 0.508;
+    }
+    let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, depth, 1.0);
 
     // Position 3D - Reduced exaggeration (0.5x) - Grounded at Z=0
     let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5, 1.0);
@@ -177,8 +185,11 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Jaune équilibré
-    let yellow = uniforms.color.rgb * 0.75;
+    // Jaune équilibré (ou rouge si flag > 0.5)
+    var base_color = uniforms.color.rgb * 0.75;
+    if (in.uv.y > 0.5) {
+        base_color = vec3<f32>(0.9, 0.12, 0.12);
+    }
     
     // 1. NORMALE PIVOTÉE
     let raw_normal = normalize(in.normal);
@@ -224,7 +235,7 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Éclat additif très léger (blancs)
     let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
-    let final_color = yellow * final_lighting + vec3<f32>(shine);
+    let final_color = base_color * final_lighting + vec3<f32>(shine);
     
     return vec4<f32>(final_color, 1.0);
 }
@@ -400,6 +411,16 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     if (world_y < uniforms.y_min - range * 0.05 || world_y > uniforms.y_max + range * 0.05) { discard; }
     if (abs(pos.x - uniforms.raw_mouse_x) < line_thickness) {
         return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+    }
+    if (abs(pos.x - uniforms.slope_x1) < line_thickness) {
+        if (world_y >= uniforms.y_min && world_y <= uniforms.slope_y1) {
+            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
+    }
+    if (abs(pos.x - uniforms.slope_x2) < line_thickness) {
+        if (world_y >= uniforms.y_min && world_y <= uniforms.slope_y2) {
+            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
     }
     discard;
 }

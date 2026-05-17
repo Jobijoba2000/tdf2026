@@ -65,7 +65,11 @@ struct Uniforms {
     camera_heading: f32,     // 144-148
     global_center_x: f32,    // 148-152
     global_center_y: f32,    // 152-156
-    _pad: f32,               // 156-160 (align to 16 bytes)
+    slope_x1: f32,           // 156-160
+    slope_x2: f32,           // 160-164
+    slope_y1: f32,           // 164-168
+    slope_y2: f32,           // 168-172
+    _pad: f32,               // 172-176 (align to 16 bytes)
 }
 
 struct ZoomAnimation {
@@ -234,6 +238,7 @@ struct State<'a> {
 
     // State
     profile_points: Vec<[f32; 2]>,
+    smooth_normals: Vec<[f32; 2]>,
     max_dist: f32,
     min_ele: f32,
     max_ele: f32,
@@ -462,7 +467,7 @@ impl<'a> State<'a> {
         let axes_index_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 160, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<Uniforms>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let _sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
@@ -701,7 +706,7 @@ impl<'a> State<'a> {
             global_fill_vertex_buffer, global_fill_index_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
             num_stage_border_vertices: 0, num_spark_vertices: 0, num_spark_fill_vertices: 0, num_spark_stroke_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
-            profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
+            profile_points, smooth_normals: Vec::new(), max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
             current_morph: 0.0, target_morph: 0.0, view_mode: 0, ctrl_pressed: false,
@@ -993,17 +998,31 @@ impl<'a> State<'a> {
             // Aide contextuelle en haut à droite
             let help_text = if self.view_mode == 0 { "[Espace] Voir le tracé 3D" } else { "[Espace] Retour au profil 2D" };
             let (pos_h, uvs_h): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_text);
-            let anchor_h = [self.size.width as f32 - 250.0, self.size.height as f32 - 45.0];
+            let anchor_h = [self.size.width as f32 - 300.0, self.size.height as f32 - 45.0];
             for i in 0..(pos_h.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos_h[i*2], pos_h[i*2+1]], uv: [uvs_h[i*2], uvs_h[i*2+1]], anchor: anchor_h, size: 0.4 });
             }
 
-            if self.global_view_state == GlobalViewState::Inactive {
+            let show_enter_help = !matches!(self.global_view_state, GlobalViewState::MorphingToTopDown | GlobalViewState::Swapped | GlobalViewState::ZoomingOut | GlobalViewState::FullyGlobal);
+            if show_enter_help {
                 let help_enter = "[Entrée] Voir la carte globale";
                 let (pos_e, uvs_e): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_enter);
-                let anchor_e = [self.size.width as f32 - 250.0, self.size.height as f32 - 75.0];
+                let anchor_e = [self.size.width as f32 - 300.0, self.size.height as f32 - 75.0];
                 for i in 0..(pos_e.len() / 2) {
                     header_text_vertices.push(TextVertex { pos: [pos_e[i*2], pos_e[i*2+1]], uv: [uvs_e[i*2], uvs_e[i*2+1]], anchor: anchor_e, size: 0.4 });
+                }
+            }
+
+            if self.view_mode == 0 && show_enter_help {
+                let help_slope = if self.slope_start.is_none() {
+                    "[Ctrl+Clic G.] Calculer la pente"
+                } else {
+                    "[Clic Droit] Sortir du calcul"
+                };
+                let (pos_s, uvs_s): (Vec<f32>, Vec<f32>) = font.get_text_geometry(help_slope);
+                let anchor_s = [self.size.width as f32 - 300.0, self.size.height as f32 - 105.0];
+                for i in 0..(pos_s.len() / 2) {
+                    header_text_vertices.push(TextVertex { pos: [pos_s[i*2], pos_s[i*2+1]], uv: [uvs_s[i*2], uvs_s[i*2+1]], anchor: anchor_s, size: 0.4 });
                 }
             }
         }
@@ -1085,6 +1104,9 @@ impl<'a> State<'a> {
     fn select_stage(&mut self, idx: usize) {
         if idx >= self.stages.len() { return; }
         self.selected_stage_idx = idx;
+        self.slope_start = None;
+        self.slope_end = None;
+        self.slope_result = None;
         let active_stage = &self.stages[idx];
         self.max_dist = active_stage.max_dist;
         self.max_ele = active_stage.max_ele;
@@ -1180,7 +1202,7 @@ impl<'a> State<'a> {
         }
 
         // Smoothing pass ultra-large (window de 81 points) pour supprimer tout jitter de précision
-        let mut smooth_normals = Vec::with_capacity(normals.len());
+        self.smooth_normals = Vec::with_capacity(normals.len());
         let window_size = 1; 
         for i in 0..normals.len() {
             let mut sn = [0.0, 0.0];
@@ -1190,7 +1212,7 @@ impl<'a> State<'a> {
                 sn[1] += normals[idx][1];
             }
             let slen = (sn[0]*sn[0] + sn[1]*sn[1]).sqrt().max(1e-6);
-            smooth_normals.push([sn[0]/slen, sn[1]/slen]);
+            self.smooth_normals.push([sn[0]/slen, sn[1]/slen]);
         }
 
         let mut count = 0;
@@ -1198,7 +1220,7 @@ impl<'a> State<'a> {
             let p = self.profile_points[i];
             let lx = active_stage.vertices[i * 26 + 2];
             let ly = active_stage.vertices[i * 26 + 3];
-            let n = smooth_normals[i];
+            let n = self.smooth_normals[i];
 
             poly_vertices.push(PolyVertex { pos: [p[0], p[1], lx, ly], side: 1.0, flag: 0.0, normal: n });
             poly_vertices.push(PolyVertex { pos: [p[0], poly_y_min, lx, ly], side: 0.0, flag: 0.0, normal: n }); 
@@ -1488,6 +1510,44 @@ impl<'a> State<'a> {
         let profile_x_screen = world_x * self.pos_scale as f32 + self.pos_translate[0] as f32;
         let profile_y_screen = (current_ele - y_min) * y_stretch as f32 * self.pos_scale as f32 + self.pos_translate[1] as f32;
 
+        let slope_x1 = if self.view_mode == 0 && self.global_view_state == GlobalViewState::Inactive {
+            if let Some(start) = self.slope_start {
+                start[0] * self.pos_scale as f32 + self.pos_translate[0] as f32
+            } else {
+                -1000.0
+            }
+        } else {
+            -1000.0
+        };
+        let slope_x2 = if self.view_mode == 0 && self.global_view_state == GlobalViewState::Inactive {
+            if let Some(end) = self.slope_end {
+                end[0] * self.pos_scale as f32 + self.pos_translate[0] as f32
+            } else {
+                -1000.0
+            }
+        } else {
+            -1000.0
+        };
+
+        let slope_y1 = if self.view_mode == 0 && self.global_view_state == GlobalViewState::Inactive {
+            if let Some(start) = self.slope_start {
+                start[1]
+            } else {
+                -1000.0
+            }
+        } else {
+            -1000.0
+        };
+        let slope_y2 = if self.view_mode == 0 && self.global_view_state == GlobalViewState::Inactive {
+            if let Some(end) = self.slope_end {
+                end[1]
+            } else {
+                -1000.0
+            }
+        } else {
+            -1000.0
+        };
+
         let uniforms = Uniforms {
             view_proj,
             translate: [self.pos_translate[0] as f32, self.pos_translate[1] as f32 - (y_min * y_stretch as f32 * self.pos_scale as f32)],
@@ -1506,9 +1566,95 @@ impl<'a> State<'a> {
             camera_heading: self.camera_angle[1],
             global_center_x: self.stages[self.selected_stage_idx].global_lx,
             global_center_y: self.stages[self.selected_stage_idx].global_ly,
+            slope_x1,
+            slope_x2,
+            slope_y1,
+            slope_y2,
             _pad: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+        let mut red_vertices = Vec::new();
+        let mut red_indices = Vec::new();
+        if self.current_morph < 0.5 && !self.profile_points.is_empty() && !self.smooth_normals.is_empty() {
+            if self.slope_result.is_some() {
+                if let Some(start) = self.slope_start {
+                    if let Some(end) = self.slope_end {
+                        let start_x = start[0].min(end[0]);
+                        let end_x = start[0].max(end[0]);
+                        
+                        let mut pts_info = Vec::new();
+                        
+                        let mut start_idx = 0;
+                        for i in 0..self.profile_points.len() - 1 {
+                            if start_x >= self.profile_points[i][0] && start_x <= self.profile_points[i+1][0] {
+                                start_idx = i;
+                                break;
+                            }
+                        }
+                        
+                        let mut end_idx = 0;
+                        for i in 0..self.profile_points.len() - 1 {
+                            if end_x >= self.profile_points[i][0] && end_x <= self.profile_points[i+1][0] {
+                                end_idx = i;
+                                break;
+                            }
+                        }
+                        
+                        if start_idx + 1 < self.profile_points.len() && end_idx + 1 < self.profile_points.len() {
+                            let active_stage = &self.stages[self.selected_stage_idx];
+                            let t_start = if self.profile_points[start_idx+1][0] == self.profile_points[start_idx][0] { 0.0 } else {
+                                (start_x - self.profile_points[start_idx][0]) / (self.profile_points[start_idx+1][0] - self.profile_points[start_idx][0])
+                            };
+                            let start_y = self.profile_points[start_idx][1] + (self.profile_points[start_idx+1][1] - self.profile_points[start_idx][1]) * t_start;
+                            let start_lx = active_stage.vertices[start_idx * 26 + 2] + (active_stage.vertices[(start_idx+1) * 26 + 2] - active_stage.vertices[start_idx * 26 + 2]) * t_start as f32;
+                            let start_ly = active_stage.vertices[start_idx * 26 + 3] + (active_stage.vertices[(start_idx+1) * 26 + 3] - active_stage.vertices[start_idx * 26 + 3]) * t_start as f32;
+                            let n_start = self.smooth_normals[start_idx];
+                            let n_next = self.smooth_normals[start_idx+1];
+                            let start_nx = n_start[0] + (n_next[0] - n_start[0]) * t_start as f32;
+                            let start_ny = n_start[1] + (n_next[1] - n_start[1]) * t_start as f32;
+                            let start_n = [start_nx, start_ny];
+                            
+                            pts_info.push((start_x, start_y, start_lx, start_ly, start_n));
+                            
+                            for i in (start_idx+1)..=end_idx {
+                                let p = self.profile_points[i];
+                                let lx = active_stage.vertices[i * 26 + 2];
+                                let ly = active_stage.vertices[i * 26 + 3];
+                                let n = self.smooth_normals[i];
+                                pts_info.push((p[0], p[1], lx, ly, n));
+                            }
+                            
+                            let t_end = if self.profile_points[end_idx+1][0] == self.profile_points[end_idx][0] { 0.0 } else {
+                                (end_x - self.profile_points[end_idx][0]) / (self.profile_points[end_idx+1][0] - self.profile_points[end_idx][0])
+                            };
+                            let end_y = self.profile_points[end_idx][1] + (self.profile_points[end_idx+1][1] - self.profile_points[end_idx][1]) * t_end;
+                            let end_lx = active_stage.vertices[end_idx * 26 + 2] + (active_stage.vertices[(end_idx+1) * 26 + 2] - active_stage.vertices[end_idx * 26 + 2]) * t_end as f32;
+                            let end_ly = active_stage.vertices[end_idx * 26 + 3] + (active_stage.vertices[(end_idx+1) * 26 + 3] - active_stage.vertices[end_idx * 26 + 3]) * t_end as f32;
+                            let n_end_start = self.smooth_normals[end_idx];
+                            let n_end_next = self.smooth_normals[end_idx+1];
+                            let end_nx = n_end_start[0] + (n_end_next[0] - n_end_start[0]) * t_end as f32;
+                            let end_ny = n_end_start[1] + (n_end_next[1] - n_end_start[1]) * t_end as f32;
+                            let end_n = [end_nx, end_ny];
+                            
+                            pts_info.push((end_x, end_y, end_lx, end_ly, end_n));
+
+                            let mut count = 0;
+                            for (x, y, lx, ly, n) in pts_info {
+                                red_vertices.push(PolyVertex { pos: [x, y, lx, ly], side: 1.0, flag: 1.0, normal: n });
+                                red_vertices.push(PolyVertex { pos: [x, y_min, lx, ly], side: 0.0, flag: 1.0, normal: n });
+                                count += 1;
+                            }
+                            
+                            for i in 0..count - 1 {
+                                let b = (i * 2) as u32;
+                                red_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let mut dyn_vertices = Vec::new();
         if let Some(ref font) = self.fa {
@@ -1516,7 +1662,6 @@ impl<'a> State<'a> {
             let half_h = (row_h * s * capped_rel_scale) / 2.0;
 
             if self.current_morph < 0.5 {
-                
                 let alt_text = format!("{:.0} m", current_ele);
                 let (pos_alt, uvs_alt): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&alt_text);
                 let anchor_alt = [profile_x_screen + gap, profile_y_screen + half_h + 5.0];
@@ -1532,29 +1677,114 @@ impl<'a> State<'a> {
                 }
             }
 
-            // Affichage de la pente (Slope)
-            if let Some(res) = self.slope_result {
-                let text = format!("Pente: {:.2}%  |  D+: {:.1}m  |  Dist: {:.2}km", res.0, res.2, res.1 / 1000.0);
-                let (pos_slope, uvs_slope): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
-                let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
-                let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
-                let anchor = [370.0, anchor_y];
-                for i in 0..(pos_slope.len() / 2) { 
-                    dyn_vertices.push(TextVertex { pos: [pos_slope[i*2], pos_slope[i*2+1]], uv: [uvs_slope[i*2], uvs_slope[i*2+1]], anchor, size: 0.5 }); 
-                }
-            } else if let Some(_) = self.slope_start {
-                let text = "Cliquez sur le 2eme point (clic droit)";
-                let (pos_help, uvs_help): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
-                let text_half_h = (row_h * 0.5 * capped_rel_scale) / 2.0;
-                let anchor_y = (self.size.height as f32 - 190.0).min(self.size.height as f32 - text_half_h - 150.0);
-                let anchor = [370.0, anchor_y];
-                for i in 0..(pos_help.len() / 2) { 
-                    dyn_vertices.push(TextVertex { pos: [pos_help[i*2], pos_help[i*2+1]], uv: [uvs_help[i*2], uvs_help[i*2+1]], anchor, size: 0.5 }); 
+            // Affichage de la pente (Slope) - Sous la barre des abscisses
+            if self.current_morph < 0.5 {
+                if let Some(res) = self.slope_result {
+                    if let Some(start) = self.slope_start {
+                        if let Some(end) = self.slope_end {
+                            let sign = if res.2 >= 0.0 { "+" } else { "" };
+                            let text_pct = format!("{:.2}%", res.0);
+                            let text_sub = format!("{}{:.1} m sur {:.2} km", sign, res.2, res.1 / 1000.0);
+                            
+                            let (pos_pct, uvs_pct): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text_pct);
+                            let (pos_sub, uvs_sub): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text_sub);
+                            
+                            let s_size_pct = 0.38f32;
+                            let s_size_sub = 0.38f32 * 0.65;
+                            
+                            let mut text_width_pct = 0.0f32;
+                            for c in text_pct.chars() {
+                                if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                                    text_width_pct += m.advance;
+                                }
+                            }
+                            let scaled_width_pct = text_width_pct * s_size_pct * capped_rel_scale;
+                            
+                            let mut text_width_sub = 0.0f32;
+                            for c in text_sub.chars() {
+                                if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                                    text_width_sub += m.advance;
+                                }
+                            }
+                            let scaled_width_sub = text_width_sub * s_size_sub * capped_rel_scale;
+                            
+                            let sx1 = start[0] * self.pos_scale as f32 + self.pos_translate[0] as f32;
+                            let sx2 = end[0] * self.pos_scale as f32 + self.pos_translate[0] as f32;
+                            let mid_x = (sx1 + sx2) * 0.5;
+                            
+                            let y_base = self.pos_translate[1] as f32 - 30.0;
+                            let h1 = row_h * s_size_pct * capped_rel_scale;
+                            let half_h1 = h1 / 2.0;
+                            let anchor_y_pct = y_base - half_h1;
+                            
+                            let gap = 5.0 * capped_rel_scale;
+                            let h2 = row_h * s_size_sub * capped_rel_scale;
+                            let half_h2 = h2 / 2.0;
+                            let anchor_y_sub = y_base - h1 - gap - half_h2;
+                            
+                            let anchor_x_pct = mid_x - scaled_width_pct * 0.5;
+                            let anchor_pct = [anchor_x_pct, anchor_y_pct];
+                            
+                            let anchor_x_sub = mid_x - scaled_width_sub * 0.5;
+                            let anchor_sub = [anchor_x_sub, anchor_y_sub];
+                            
+                            for i in 0..(pos_pct.len() / 2) { 
+                                dyn_vertices.push(TextVertex { pos: [pos_pct[i*2], pos_pct[i*2+1]], uv: [uvs_pct[i*2], uvs_pct[i*2+1]], anchor: anchor_pct, size: s_size_pct }); 
+                            }
+                            for i in 0..(pos_sub.len() / 2) { 
+                                dyn_vertices.push(TextVertex { pos: [pos_sub[i*2], pos_sub[i*2+1]], uv: [uvs_sub[i*2], uvs_sub[i*2+1]], anchor: anchor_sub, size: s_size_sub }); 
+                            }
+                        }
+                    }
+                } else if self.slope_start.is_some() {
+                    let text = "Cliquer sur le second point (Ctrl+clic)";
+                    let (pos_help, uvs_help): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text);
+                    
+                    let mut text_width = 0.0f32;
+                    for c in text.chars() {
+                        if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                            text_width += m.advance;
+                        }
+                    }
+                    let s_size = 0.35f32;
+                    let scaled_width = text_width * s_size * capped_rel_scale;
+                    
+                    let anchor_x = (self.mouse_pos[0] - 15.0 - scaled_width).max(355.0);
+                    let text_half_h = (row_h * s_size * capped_rel_scale) / 2.0;
+                    let anchor_y = self.pos_translate[1] as f32 - 30.0 - text_half_h;
+                    let anchor = [anchor_x, anchor_y];
+                    
+                    for i in 0..(pos_help.len() / 2) { 
+                        dyn_vertices.push(TextVertex { pos: [pos_help[i*2], pos_help[i*2+1]], uv: [uvs_help[i*2], uvs_help[i*2+1]], anchor, size: s_size }); 
+                    }
                 }
             }
         }
         let dyn_buf = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (dyn_vertices.len() * 28) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&dyn_buf, 0, bytemuck::cast_slice(&dyn_vertices));
+
+        let mut red_v_buf = None;
+        let mut red_i_buf = None;
+        if !red_indices.is_empty() {
+            let v_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Red Poly Vertex Buffer"),
+                size: (red_vertices.len() * 32) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&v_buf, 0, bytemuck::cast_slice(&red_vertices));
+            
+            let i_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Red Poly Index Buffer"),
+                size: (red_indices.len() * 4) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&i_buf, 0, bytemuck::cast_slice(&red_indices));
+            
+            red_v_buf = Some(v_buf);
+            red_i_buf = Some(i_buf);
+        }
 
         // --- PASS 1: 3D geometry with depth buffer ---
         {
@@ -1583,6 +1813,13 @@ impl<'a> State<'a> {
             pass.set_vertex_buffer(0, self.poly_vertex_buffer.slice(..));
             pass.set_index_buffer(self.poly_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..self.num_poly_indices, 0, 0..1);
+
+            // Draw Red Selection Fill if active!
+            if let (Some(ref v_buf), Some(ref i_buf)) = (&red_v_buf, &red_i_buf) {
+                pass.set_vertex_buffer(0, v_buf.slice(..));
+                pass.set_index_buffer(i_buf.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..(red_indices.len() as u32), 0, 0..1);
+            }
 
             // Draw Profile/Trace Stroke (always needed)
             
@@ -1736,6 +1973,9 @@ fn main() {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
                     
                     Key::Named(NamedKey::Enter) => {
+                        state.slope_start = None;
+                        state.slope_end = None;
+                        state.slope_result = None;
                         if state.global_view_state == GlobalViewState::Inactive {
                             if state.view_mode == 0 {
                                 state.view_mode = 1;
@@ -1765,6 +2005,9 @@ fn main() {
                         }
                     }
                     Key::Named(NamedKey::Space) => {
+                        state.slope_start = None;
+                        state.slope_end = None;
+                        state.slope_result = None;
                         if state.global_view_state != GlobalViewState::Inactive {
                             if state.global_view_state == GlobalViewState::ZoomingIn || state.global_view_state == GlobalViewState::MorphingTo2D {
                                 return; // Ignore space while already exiting
@@ -1875,21 +2118,31 @@ fn main() {
                     state.mouse_pressed = *s == ElementState::Pressed;
                     
                     if state.mouse_pressed {
-                        if state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
+                        if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
                             // Slope Calculation with Ctrl + Left Click
                             let p = state.get_profile_at_mouse();
-                            if let Some(start) = state.slope_start {
+                            if state.slope_result.is_some() {
+                                state.slope_start = Some(p);
+                                state.slope_end = None;
+                                state.slope_result = None;
+                            } else if let Some(start) = state.slope_start {
                                 let dist_diff = (p[0] - start[0]).abs();
                                 let ele_diff = p[1] - start[1];
                                 if dist_diff > 0.1 {
                                     let slope = (ele_diff / dist_diff) * 100.0;
                                     state.slope_result = Some((slope, dist_diff, ele_diff));
+                                    state.slope_end = Some(p);
+                                } else {
+                                    state.slope_start = None;
+                                    state.slope_end = None;
+                                    state.slope_result = None;
                                 }
-                                state.slope_start = None;
                             } else {
                                 state.slope_start = Some(p);
+                                state.slope_end = None;
                                 state.slope_result = None;
                             }
+                            state.rebuild_ui();
                         } else if state.mouse_pos[0] < 350.0 {
                             // Sidebar selection
                             let y_from_top = state.size.height as f32 - state.mouse_pos[1];
@@ -1897,12 +2150,19 @@ fn main() {
                             if idx >= 0 && (idx as usize) < state.stages.len() {
                                 state.select_stage(idx as usize);
                                 state.slope_start = None;
+                                state.slope_end = None;
                                 state.slope_result = None;
                             }
                         }
                     }
                 } else if *button == MouseButton::Right {
                     state.right_mouse_pressed = *s == ElementState::Pressed;
+                    if state.right_mouse_pressed && state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive {
+                        state.slope_start = None;
+                        state.slope_end = None;
+                        state.slope_result = None;
+                        state.rebuild_ui();
+                    }
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
