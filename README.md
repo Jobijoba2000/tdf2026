@@ -2,6 +2,8 @@
 
 Une application de bureau ultra-performante développée en **Rust**, permettant de visualiser de manière interactive les étapes du **Tour de France 2026**. Propulsée par **wgpu** (WebGPU pour Rust) et **glam**, elle offre un rendu graphique 3D en temps réel à 60 FPS avec des transitions animées fluides (morphing) et une interface utilisateur haut de gamme.
 
+https://github.com/user-attachments/assets/6d848c80-9903-4a48-ad48-35eae3c320f3
+
 ---
 
 ## 🌟 Fonctionnalités Principales
