@@ -235,6 +235,11 @@ fn fs_yellow(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_sparkline_fill(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(uniforms.color.rgb * 0.6375, 1.0);
+}
+
+@fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(1.0, 1.0, 1.0, 1.0); // Blanc pur
 }

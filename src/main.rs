@@ -180,6 +180,7 @@ struct State<'a> {
     selected_render_pipeline: wgpu::RenderPipeline,
     hover_render_pipeline: wgpu::RenderPipeline,
     sparkline_render_pipeline: wgpu::RenderPipeline,
+    sparkline_fill_render_pipeline: wgpu::RenderPipeline,
     reticule_render_pipeline: wgpu::RenderPipeline,
     dot_render_pipeline: wgpu::RenderPipeline,
     header_render_pipeline: wgpu::RenderPipeline,
@@ -223,6 +224,8 @@ struct State<'a> {
     num_static_text_vertices: u32,
     num_stage_border_vertices: u32,
     num_spark_vertices: u32,
+    num_spark_fill_vertices: u32,
+    num_spark_stroke_vertices: u32,
     num_sidebar_text_vertices: u32,
     num_header_text_vertices: u32,
     num_header_border_vertices: u32,
@@ -633,6 +636,9 @@ impl<'a> State<'a> {
         // Sparkline pipeline
         let sparkline_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_yellow", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
+        // Sparkline fill pipeline
+        let sparkline_fill_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("Sparkline Fill Pipeline"), layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sparkline_fill", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+
         let selected_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let hover_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -686,7 +692,7 @@ impl<'a> State<'a> {
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
-            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, reticule_render_pipeline,
+            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, sparkline_fill_render_pipeline, reticule_render_pipeline,
             dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
@@ -694,7 +700,7 @@ impl<'a> State<'a> {
             selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer, global_vertex_buffer, global_index_buffer,
             global_fill_vertex_buffer, global_fill_index_buffer,
             num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
-            num_stage_border_vertices: 0, num_spark_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
+            num_stage_border_vertices: 0, num_spark_vertices: 0, num_spark_fill_vertices: 0, num_spark_stroke_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
             profile_points, max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
@@ -721,6 +727,8 @@ impl<'a> State<'a> {
         let mut sidebar_text_vertices = Vec::new();
         let mut spark_vertices = Vec::new();
         let mut border_vertices = Vec::new();
+        let mut spark_fill_count = 0;
+        let mut spark_stroke_count = 0;
 
         if let Some(ref font) = self.fa {
             for (idx, stage) in self.stages.iter().enumerate() {
@@ -781,13 +789,29 @@ impl<'a> State<'a> {
                 let height = (width * graph_height / graph_width).min(120.0); // légèrement réduit pour le padding
                 
                 let padding_bottom = 20.0;
+            }
+
+            spark_fill_count = 0;
+            spark_stroke_count = 0;
+
+            // Remplissage sous la courbe (Première passe)
+            for (idx, stage) in self.stages.iter().enumerate() {
+                let y_top = size.height as f32 - 40.0 - (idx as f32 * 260.0) + scroll;
+                let card_h = 230.0;
+                let x_left = margin_side;
+                let x_start = x_left + 15.0;
+                let width = 310.0;
+                
+                let graph_width = self.size.width as f32 - 500.0;
+                let graph_height = self.size.height as f32 * 0.5;
+                let height = (width * graph_height / graph_width).min(120.0);
+                
+                let padding_bottom = 20.0;
                 let y_bottom = (y_top - card_h) + padding_bottom;
-                let _y_base = y_bottom; 
                 
                 let min = stage.min_ele;
                 let max = stage.max_ele;
                 
-                // Même formule que le graphique principal
                 let delta_e = stage.max_dist * self.global_max_ratio_diff;
                 let display_min = if max <= delta_e {
                     0.0
@@ -797,7 +821,6 @@ impl<'a> State<'a> {
                 };
                 let display_range = delta_e.max(1.0);
                 
-                // Remplissage blanc semi-opaque sous la courbe
                 for j in 0..59 {
                     let x1 = x_start + (j as f32 / 59.0) * width;
                     let x2 = x_start + ((j+1) as f32 / 59.0) * width;
@@ -811,9 +834,37 @@ impl<'a> State<'a> {
                     spark_vertices.push(PolyVertex::new([x1, y_bottom, 0.0, 0.0], 0.0));
                     spark_vertices.push(PolyVertex::new([x2, y2, 0.0, 0.0], 1.0));
                     spark_vertices.push(PolyVertex::new([x2, y_bottom, 0.0, 0.0], 0.0));
+                    spark_fill_count += 6;
                 }
+            }
+
+            // Ligne du profil épaisse (Deuxième passe)
+            for (idx, stage) in self.stages.iter().enumerate() {
+                let y_top = size.height as f32 - 40.0 - (idx as f32 * 260.0) + scroll;
+                let card_h = 230.0;
+                let x_left = margin_side;
+                let x_start = x_left + 15.0;
+                let width = 310.0;
                 
-                // Ligne du profil (épaisse)
+                let graph_width = self.size.width as f32 - 500.0;
+                let graph_height = self.size.height as f32 * 0.5;
+                let height = (width * graph_height / graph_width).min(120.0);
+                
+                let padding_bottom = 20.0;
+                let y_bottom = (y_top - card_h) + padding_bottom;
+                
+                let min = stage.min_ele;
+                let max = stage.max_ele;
+                
+                let delta_e = stage.max_dist * self.global_max_ratio_diff;
+                let display_min = if max <= delta_e {
+                    0.0
+                } else {
+                    let padding = delta_e * 0.1;
+                    (min - padding).max(0.0)
+                };
+                let display_range = delta_e.max(1.0);
+                
                 for j in 0..59 {
                     let x1 = x_start + (j as f32 / 59.0) * width;
                     let x2 = x_start + ((j+1) as f32 / 59.0) * width;
@@ -827,9 +878,12 @@ impl<'a> State<'a> {
                     spark_vertices.push(PolyVertex::new([x2 + ux*w, y2 + uy*w, 0.0, 0.0], 0.0));
                     spark_vertices.push(PolyVertex::new([x1 - ux*w, y1 - uy*w, 0.0, 0.0], 0.0));
                     spark_vertices.push(PolyVertex::new([x2 - ux*w, y2 - uy*w, 0.0, 0.0], 0.0));
+                    spark_stroke_count += 6;
                 }
             }
         }
+        self.num_spark_fill_vertices = spark_fill_count;
+        self.num_spark_stroke_vertices = spark_stroke_count;
         self.num_spark_vertices = spark_vertices.len() as u32;
         self.sparkline_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (spark_vertices.len() * std::mem::size_of::<PolyVertex>()).max(32) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&self.sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
@@ -1598,10 +1652,15 @@ impl<'a> State<'a> {
             pass.set_vertex_buffer(0, self.stage_borders_buffer.slice(..));
             pass.draw(0..self.num_stage_border_vertices, 0..1);
 
-            // 5. Sparklines
+            // 5. Sparklines Fills
+            pass.set_pipeline(&self.sparkline_fill_render_pipeline);
+            pass.set_vertex_buffer(0, self.sparkline_buffer.slice(..));
+            pass.draw(0..self.num_spark_fill_vertices, 0..1);
+
+            // 6. Sparklines Strokes
             pass.set_pipeline(&self.sparkline_render_pipeline);
             pass.set_vertex_buffer(0, self.sparkline_buffer.slice(..));
-            pass.draw(0..self.num_spark_vertices, 0..1);
+            pass.draw(self.num_spark_fill_vertices..(self.num_spark_fill_vertices + self.num_spark_stroke_vertices), 0..1);
 
             // 6. Sidebar text
             if let Some(ref bg) = self.atlas_bind_group {
