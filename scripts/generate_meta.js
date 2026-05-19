@@ -16,6 +16,13 @@ const RACE_METAS = {
         map_center_lat: 42.5,
         map_center_lon: 12.5,
     },
+    vuelta: {
+        id: "vuelta",
+        name: "Vuelta a España 2026",
+        color: [1.0, 0.0, 0.0, 1.0],
+        map_center_lat: 40.0,
+        map_center_lon: -3.5,
+    },
 };
 
 const args = process.argv.slice(2);

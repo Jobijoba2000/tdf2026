@@ -1,0 +1,12 @@
+{
+  "id": "vuelta",
+  "name": "Vuelta a España 2026",
+  "color": [
+    1,
+    0,
+    0,
+    1
+  ],
+  "map_center_lat": 40,
+  "map_center_lon": -3.5
+}

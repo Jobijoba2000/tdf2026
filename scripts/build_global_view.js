@@ -24,9 +24,19 @@ const RACE_CONFIGS = {
         geojsonPath: path.join(__dirname, '../data/geojson/gadm41_ITA_0.json'),
         gpxMode: 'multi',
         gpxDir: path.join(__dirname, '../data/gpx/giro-d-italia-2026'),
+        gpxPrefix: 'etappe-',
         numStages: 21,
         globalLat: 42.5,
         globalLon: 12.5,
+    },
+    vuelta: {
+        geojsonPath: path.join(__dirname, '../data/geojson/gadm41_ESP_0.json'),
+        gpxMode: 'multi',
+        gpxDir: path.join(__dirname, '../data/gpx/vuelta-a-espana-2026'),
+        gpxPrefix: 'stage-',
+        numStages: 21,
+        globalLat: 40.0,
+        globalLon: -3.5,
     },
 };
 
@@ -122,8 +132,9 @@ if (config.gpxMode === 'single') {
     }
 } else {
     // Multi-file mode
+    const prefix = config.gpxPrefix || 'stage-';
     for (let i = 1; i <= config.numStages; i++) {
-        const gpxFile = path.join(config.gpxDir, `etappe-${i}-route.gpx`);
+        const gpxFile = path.join(config.gpxDir, `${prefix}${i}-route.gpx`);
         if (!fs.existsSync(gpxFile)) { console.warn(`  [WARN] Missing: ${gpxFile}`); continue; }
         const gpxData = fs.readFileSync(gpxFile, 'utf8');
         const ptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)">/g;
