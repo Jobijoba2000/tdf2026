@@ -2147,13 +2147,13 @@ impl<'a> State<'a> {
                         if let Some(end) = self.slope_end {
                             let sign = if res.2 >= 0.0 { "+" } else { "" };
                             let text_pct = format!("{:.2}%", res.0);
-                            let text_sub = format!("{}{:.1} m sur {:.2} km", sign, res.2, res.1 / 1000.0);
+                            let text_sub = format!("{}{:.0} m sur {:.2} km", sign, res.2, res.1 / 1000.0);
                             
                             let (pos_pct, uvs_pct): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text_pct);
                             let (pos_sub, uvs_sub): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&text_sub);
                             
                             let s_size_pct = 0.38f32;
-                            let s_size_sub = 0.38f32 * 0.65;
+                            let s_size_sub = 0.38f32;
                             
                             let mut text_width_pct = 0.0f32;
                             for c in text_pct.chars() {
