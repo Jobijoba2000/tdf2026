@@ -79,6 +79,36 @@ const RACE_CONFIGS = {
             { num: 21, name: 'Étape 21', start: 'Granada',           finish: 'Granada',           date: '13/09/2026' },
         ],
     },
+    tdf_v2: {
+        gpxMode: 'multi',
+        gpxDir: path.join(__dirname, '../data/gpx/tour-de-france-2026-v2'),
+        gpxPrefix: 'etappe-',
+        globalLat: 46.5,
+        globalLon: 2.5,
+        stages: [
+            { num: 1,  name: 'Étape 1',  start: 'Barcelona',                  finish: 'Barcelona',                  date: '04/07/2026' },
+            { num: 2,  name: 'Étape 2',  start: 'Tarragona',                  finish: 'Barcelona',                  date: '05/07/2026' },
+            { num: 3,  name: 'Étape 3',  start: 'Granollers',                 finish: 'Les Angles',                 date: '06/07/2026' },
+            { num: 4,  name: 'Étape 4',  start: 'Carcassonne',                finish: 'Foix',                       date: '07/07/2026' },
+            { num: 5,  name: 'Étape 5',  start: 'Lannemezan',                 finish: 'Pau',                        date: '08/07/2026' },
+            { num: 6,  name: 'Étape 6',  start: 'Pau',                        finish: 'Gavarnie-Cèdre',             date: '09/07/2026' },
+            { num: 7,  name: 'Étape 7',  start: 'Hagetmau',                   finish: 'Bordeaux',                   date: '10/07/2026' },
+            { num: 8,  name: 'Étape 8',  start: 'Périgueux',                  finish: 'Bergerac',                   date: '11/07/2026' },
+            { num: 9,  name: 'Étape 9',  start: 'Malemort',                   finish: 'Ussel',                      date: '12/07/2026' },
+            { num: 10, name: 'Étape 10', start: 'Aurillac',                   finish: 'Le Lioran',                  date: '14/07/2026' },
+            { num: 11, name: 'Étape 11', start: 'Vichy',                      finish: 'Nevers',                     date: '15/07/2026' },
+            { num: 12, name: 'Étape 12', start: 'Magny-Cours',                finish: 'Chalon-sur-Saône',           date: '16/07/2026' },
+            { num: 13, name: 'Étape 13', start: 'Dole',                       finish: 'Belfort',                    date: '17/07/2026' },
+            { num: 14, name: 'Étape 14', start: 'Mulhouse',                   finish: 'Le Markstein',               date: '18/07/2026' },
+            { num: 15, name: 'Étape 15', start: 'Champagnole',                finish: 'Plateau de Solaison',        date: '19/07/2026' },
+            { num: 16, name: 'Étape 16', start: 'Évian-les-Bains',             finish: 'Thonon-les-Bains',           date: '21/07/2026' },
+            { num: 17, name: 'Étape 17', start: 'Chambéry',                   finish: 'Voiron',                     date: '22/07/2026' },
+            { num: 18, name: 'Étape 18', start: 'Voiron',                     finish: 'Orcières-Merlette',          date: '23/07/2026' },
+            { num: 19, name: 'Étape 19', start: 'Gap',                        finish: "Alpe d'Huez",                date: '24/07/2026' },
+            { num: 20, name: 'Étape 20', start: "Bourg-d'Oisans",             finish: "Alpe d'Huez",                date: '25/07/2026' },
+            { num: 21, name: 'Étape 21', start: 'Thoiry',                     finish: 'Paris',                      date: '26/07/2026' },
+        ],
+    },
 };
 
 if (!RACE_CONFIGS[raceId]) {
@@ -159,7 +189,10 @@ if (config.gpxMode === 'single') {
     console.log("Parsing multi-file GPX directory...");
     for (const stageInfo of config.stages) {
         const prefix = config.gpxPrefix || 'stage-';
-        const gpxFile = path.join(config.gpxDir, `${prefix}${stageInfo.num}-route.gpx`);
+        let gpxFile = path.join(config.gpxDir, `${prefix}${stageInfo.num}-route.gpx`);
+        if (!fs.existsSync(gpxFile)) {
+            gpxFile = path.join(config.gpxDir, `${prefix}${stageInfo.num}.gpx`);
+        }
         if (!fs.existsSync(gpxFile)) {
             console.warn(`  [WARN] Missing GPX: ${gpxFile}`);
             continue;

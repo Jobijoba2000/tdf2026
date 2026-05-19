@@ -23,6 +23,13 @@ const RACE_METAS = {
         map_center_lat: 40.0,
         map_center_lon: -3.5,
     },
+    tdf_v2: {
+        id: "tdf_v2",
+        name: "Tour de France 2026 (v2)",
+        color: [1.0, 0.85, 0.0, 1.0],
+        map_center_lat: 46.5,
+        map_center_lon: 2.5,
+    },
 };
 
 const args = process.argv.slice(2);

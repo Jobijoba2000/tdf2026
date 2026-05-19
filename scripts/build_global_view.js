@@ -38,6 +38,15 @@ const RACE_CONFIGS = {
         globalLat: 40.0,
         globalLon: -3.5,
     },
+    tdf_v2: {
+        geojsonPath: path.join(__dirname, '../data/geojson/gadm41_FRA_0.geojson'),
+        gpxMode: 'multi',
+        gpxDir: path.join(__dirname, '../data/gpx/tour-de-france-2026-v2'),
+        gpxPrefix: 'etappe-',
+        numStages: 21,
+        globalLat: 46.5,
+        globalLon: 2.5,
+    },
 };
 
 if (!RACE_CONFIGS[raceId]) {
@@ -134,7 +143,10 @@ if (config.gpxMode === 'single') {
     // Multi-file mode
     const prefix = config.gpxPrefix || 'stage-';
     for (let i = 1; i <= config.numStages; i++) {
-        const gpxFile = path.join(config.gpxDir, `${prefix}${i}-route.gpx`);
+        let gpxFile = path.join(config.gpxDir, `${prefix}${i}-route.gpx`);
+        if (!fs.existsSync(gpxFile)) {
+            gpxFile = path.join(config.gpxDir, `${prefix}${i}.gpx`);
+        }
         if (!fs.existsSync(gpxFile)) { console.warn(`  [WARN] Missing: ${gpxFile}`); continue; }
         const gpxData = fs.readFileSync(gpxFile, 'utf8');
         const ptRegex = /<trkpt\s+lat="([^"]+)"\s+lon="([^"]+)">/g;
