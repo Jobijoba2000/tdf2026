@@ -26,7 +26,7 @@ pub struct FontAtlas {
     pub rgba_data: Vec<u8>,
 }
 
-const CHARACTERS: &str = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àâéèêëîïôûùçÀÂÉÈÊËÎÏÔÛÙÇ-.,\\'()?!:;/@#$%^&*=_+[]{}<>|";
+const CHARACTERS: &str = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àâéèêëîïôûùçÀÂÉÈÊËÎÏÔÛÙÇñÑíÍáÁóÓúÚ-.,\\'()?!:;/@#$%^&*=_+[]{}<>|";
 
 impl FontAtlas {
     pub fn from_file(path: &str) -> Option<Self> {
@@ -120,8 +120,6 @@ impl FontAtlas {
         })
     }
 
-    /// Calcule la géométrie des quads pour un texte donné (aligné à gauche à 0,0)
-    /// Retourne (positions: Vec<[f32;2]>, uvs: Vec<[f32;2]>)
     pub fn get_text_geometry(&self, text: &str) -> (Vec<f32>, Vec<f32>) {
         let mut positions = Vec::new();
         let mut uvs = Vec::new();
@@ -129,13 +127,21 @@ impl FontAtlas {
         let mut cur_x = 0.0f32;
         let row_h = self.font_size * 1.4; // Hauteur totale du rang dans l'atlas
 
+        // Trouver le ox du premier caractère pour aligner parfaitement à gauche
+        let mut first_ox = 0.0;
+        if let Some(first_char) = text.chars().next() {
+            if let Some(m) = self.metrics.get(&first_char).or_else(|| self.metrics.get(&' ')) {
+                first_ox = m.ox;
+            }
+        }
+
         for c in text.chars() {
             let m = match self.metrics.get(&c).or_else(|| self.metrics.get(&' ')) {
                 Some(m) => m,
                 None => continue,
             };
 
-            let x0 = cur_x + m.ox;
+            let x0 = cur_x + m.ox - first_ox;
             let x1 = x0 + (m.width as f32);
             
             let y0 = -row_h / 2.0;

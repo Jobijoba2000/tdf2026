@@ -326,7 +326,7 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
 fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
     let a_center = textureSample(t_color, t_sampler, in.uv).a;
     let size = vec2<f32>(textureDimensions(t_color, 0));
-    let offset = 2.5 / size; 
+    let offset = 3.5 / size; 
     
     let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
     let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
@@ -341,7 +341,7 @@ fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
     if (outline < 0.01 && a_center < 0.01) { discard; }
     
     // Simuler du gras
-    let bold_a = smoothstep(0.2, 0.5, a_center);
+    let bold_a = smoothstep(0.12, 0.42, a_center);
     let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), bold_a);
     return vec4<f32>(final_color, max(bold_a, outline));
 }

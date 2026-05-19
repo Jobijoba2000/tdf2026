@@ -367,6 +367,7 @@ struct State<'a> {
     current_race_idx: usize,
     app_phase: AppPhase,
     hovered_menu_idx: Option<usize>,
+    use_neon_green: bool,
 }
 
 
@@ -410,7 +411,12 @@ impl<'a> State<'a> {
         let initial_race = available_races.get(initial_race_idx)
             .or_else(|| available_races.first())
             .expect("No races available — check data/races/ directory");
-        let race_color = initial_race.meta.color;
+        let use_neon_green = true;
+        let race_color = if use_neon_green {
+            [0.18, 1.0, 0.18, 1.0]
+        } else {
+            initial_race.meta.color
+        };
         let race_name = initial_race.meta.name.clone();
 
         let compressed_data = std::fs::read(&initial_race.profile_path)
@@ -708,7 +714,7 @@ impl<'a> State<'a> {
         let poly_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_poly", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32, 2 => Float32, 3 => Float32x2] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_poly", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() }, depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: wgpu::StencilState::default(), bias: wgpu::DepthBiasState::default() }), multisample: wgpu::MultisampleState::default(), multiview: None });
         let text_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_graph", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let text_screen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_screen", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_graph", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let text_ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_std", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+        let text_ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_graph", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
         let reticule_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_reticule", buffers: &[] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_reticule", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let dot_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_dot", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_dot", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
@@ -818,6 +824,7 @@ impl<'a> State<'a> {
             hover_stage_idx: None, global_view_state: GlobalViewState::Inactive, global_zoom_animation: None, camera_animation: None,
             race_color, race_name, available_races, current_race_idx: initial_race_idx,
             app_phase, hovered_menu_idx: None,
+            use_neon_green,
         };
 
         state.rebuild_ui();
@@ -829,7 +836,11 @@ impl<'a> State<'a> {
         if race_idx >= self.available_races.len() { return; }
         self.current_race_idx = race_idx;
         let race = self.available_races[race_idx].clone();
-        self.race_color = race.meta.color;
+        self.race_color = if self.use_neon_green {
+            [0.18, 1.0, 0.18, 1.0]
+        } else {
+            race.meta.color
+        };
         self.race_name = race.meta.name.clone();
 
         // 1. Load profile.bin
@@ -1146,8 +1157,6 @@ impl<'a> State<'a> {
         self.num_spark_vertices = spark_vertices.len() as u32;
         self.sparkline_buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: (spark_vertices.len() * std::mem::size_of::<PolyVertex>()).max(32) as u64, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         self.queue.write_buffer(&self.sparkline_buffer, 0, bytemuck::cast_slice(&spark_vertices));
-        self.num_stage_border_vertices = border_vertices.len() as u32;
-        self.queue.write_buffer(&self.stage_borders_buffer, 0, bytemuck::cast_slice(&border_vertices));
         self.num_sidebar_text_vertices = sidebar_text_vertices.len() as u32;
         self.queue.write_buffer(&self.sidebar_text_buffer, 0, bytemuck::cast_slice(&sidebar_text_vertices));
 
@@ -1188,36 +1197,6 @@ impl<'a> State<'a> {
             PolyVertex::new([355.0, size.height as f32 - 5.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0 + header_w, size.height as f32 - 180.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0 + header_w, size.height as f32 - 5.0, 0.0, 0.0], 0.0),
         ];
 
-        // Right Header buttons (Profil / Tracé)
-        let btn_w = 120.0;
-        let btn_h = 45.0;
-        let btn_gap = 10.0;
-        let btn_x_start = size.width as f32 - (btn_w * 2.0 + btn_gap + 20.0);
-        let btn_y = size.height as f32 - 60.0;
-
-        for i in 0..2 {
-            let bx = btn_x_start + (i as f32 * (btn_w + btn_gap));
-            let is_selected = self.view_mode == i as u32;
-            let b = if is_selected { 2.0 } else { 1.0 };
-            
-            // Button frame
-            let rects = [
-                [bx, btn_y - b, bx + btn_w, btn_y], // top
-                [bx, btn_y - btn_h, bx + btn_w, btn_y - btn_h + b], // bottom
-                [bx, btn_y - btn_h, bx + b, btn_y], // left
-                [bx + btn_w - b, btn_y - btn_h, bx + btn_w, btn_y], // right
-            ];
-            for r in rects {
-                border_vertices.push(PolyVertex::new([r[0], r[1], 0.0, 0.0], 0.0));
-                border_vertices.push(PolyVertex::new([r[2], r[1], 0.0, 0.0], 0.0));
-                border_vertices.push(PolyVertex::new([r[0], r[3], 0.0, 0.0], 0.0));
-                border_vertices.push(PolyVertex::new([r[0], r[3], 0.0, 0.0], 0.0));
-                border_vertices.push(PolyVertex::new([r[2], r[1], 0.0, 0.0], 0.0));
-                border_vertices.push(PolyVertex::new([r[2], r[3], 0.0, 0.0], 0.0));
-            }
-            
-        }
-
         self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
 
         // Mise à jour du texte du header (format identique aux cartes de la sidebar)
@@ -1225,10 +1204,18 @@ impl<'a> State<'a> {
         if let Some(ref font) = self.fa {
             let stage = &self.stages[self.selected_stage_idx];
             
+            // Ligne 0: Nom de la course pour changer de course
+            let race_line = self.race_name.clone();
+            let (pos_r, uvs_r): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&race_line);
+            let anchor_r = [370.0, self.size.height as f32 - 35.0];
+            for i in 0..(pos_r.len() / 2) {
+                header_text_vertices.push(TextVertex { pos: [pos_r[i*2], pos_r[i*2+1]], uv: [uvs_r[i*2], uvs_r[i*2+1]], anchor: anchor_r, size: 0.52 });
+            }
+
             // Ligne 1: Etape N
             let line1 = format!("Etape {}", self.selected_stage_idx + 1);
             let (pos1, uvs1): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line1);
-            let anchor1 = [370.0, self.size.height as f32 - 60.0];
+            let anchor1 = [370.0, self.size.height as f32 - 82.0];
             for i in 0..(pos1.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos1[i*2], pos1[i*2+1]], uv: [uvs1[i*2], uvs1[i*2+1]], anchor: anchor1, size: 1.32 });
             }
@@ -1236,7 +1223,7 @@ impl<'a> State<'a> {
             // Ligne 2: Départ > Arrivée
             let line2 = format!("{} > {}", stage.start, stage.finish);
             let (pos2, uvs2): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line2);
-            let anchor2 = [370.0, self.size.height as f32 - 120.0];
+            let anchor2 = [370.0, self.size.height as f32 - 130.0];
             for i in 0..(pos2.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos2[i*2], pos2[i*2+1]], uv: [uvs2[i*2], uvs2[i*2+1]], anchor: anchor2, size: 0.66 });
             }
@@ -1244,7 +1231,7 @@ impl<'a> State<'a> {
             // Ligne 3: Date | Distance
             let line3 = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
             let (pos3, uvs3): (Vec<f32>, Vec<f32>) = font.get_text_geometry(&line3);
-            let anchor3 = [370.0, self.size.height as f32 - 160.0];
+            let anchor3 = [370.0, self.size.height as f32 - 162.0];
             for i in 0..(pos3.len() / 2) {
                 header_text_vertices.push(TextVertex { pos: [pos3[i*2], pos3[i*2+1]], uv: [uvs3[i*2], uvs3[i*2+1]], anchor: anchor3, size: 0.48 });
             }
@@ -1282,6 +1269,8 @@ impl<'a> State<'a> {
         }
         self.num_header_text_vertices = header_text_vertices.len() as u32;
         self.queue.write_buffer(&self.header_text_buffer, 0, bytemuck::cast_slice(&header_text_vertices));
+        self.num_stage_border_vertices = border_vertices.len() as u32;
+        self.queue.write_buffer(&self.stage_borders_buffer, 0, bytemuck::cast_slice(&border_vertices));
     }
 
     fn update_axes(&mut self) {
@@ -1387,7 +1376,7 @@ impl<'a> State<'a> {
         self.initial_scale = fit_scale as f64;
         self.camera_offset = [350.0 + rpw * 0.5, self.size.height as f32 * 0.5];
 
-        self.pos_translate = [350.0 + (rpw * 0.1) as f64, (self.size.height as f64) * 0.25];
+        self.pos_translate = [350.0 + (rpw * 0.1) as f64, (self.size.height as f64 - 260.0) * 0.2];
 
         // Write to existing buffers
         self.vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2467,6 +2456,17 @@ fn main() {
                         };
                         state.rebuild_ui();
                     }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("c") => {
+                        state.use_neon_green = !state.use_neon_green;
+                        if state.use_neon_green {
+                            state.race_color = [0.18, 1.0, 0.18, 1.0];
+                        } else {
+                            let race = state.available_races[state.current_race_idx].clone();
+                            state.race_color = race.meta.color;
+                        }
+                        state.rebuild_ui();
+                        state.window.request_redraw();
+                    }
                     _ => {
                         if state.app_phase == AppPhase::Racing {
                             match key {
@@ -2631,7 +2631,13 @@ fn main() {
                                 state.mouse_pressed = false; // reset
                             }
                         } else {
-                            if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
+                            let rpw = state.size.width as f32 - 352.0;
+                            let header_w = rpw * 0.5;
+                            if state.mouse_pos[0] >= 355.0 && state.mouse_pos[0] <= 355.0 + header_w && state.mouse_pos[1] >= state.size.height as f32 - 180.0 && state.mouse_pos[1] <= state.size.height as f32 - 5.0 {
+                                state.app_phase = AppPhase::Menu;
+                                state.mouse_pressed = false;
+                                state.rebuild_ui();
+                            } else if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
                                 // Slope Calculation with Ctrl + Left Click
                                 let p = state.get_profile_at_mouse();
                                 if state.slope_result.is_some() {
@@ -2726,7 +2732,7 @@ fn main() {
                 } else {
                     let target_translate = if target_scale == state.initial_scale {
                         let rpw = (state.size.width as f64) - 350.0;
-                        [350.0 + rpw * 0.1, (state.size.height as f64) * 0.25]
+                        [350.0 + rpw * 0.1, (state.size.height as f64 - 260.0) * 0.2]
                     } else {
                         let wx = (state.mouse_pos[0] as f64 - state.pos_translate[0]) / state.pos_scale;
                         let wy = (state.mouse_pos[1] as f64 - state.pos_translate[1]) / state.pos_scale;
