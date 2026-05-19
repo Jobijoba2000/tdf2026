@@ -181,7 +181,7 @@ fn fs_header_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(0.2, 0.2, 0.05, 0.8);
+    return vec4<f32>(uniforms.color.rgb * 0.2, 0.8);
 }
 @fragment
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -242,7 +242,7 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_yellow(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(1.0, 0.85, 0.0, 1.0);
+    return uniforms.color;
 }
 
 @fragment

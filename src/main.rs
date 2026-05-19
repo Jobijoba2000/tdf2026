@@ -3,6 +3,7 @@ mod font_atlas;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::path::{Path, PathBuf};
 use crate::font_atlas::FontAtlas;
 use winit::{
     event::*,
@@ -10,6 +11,82 @@ use winit::{
     window::WindowBuilder,
     keyboard::{Key, NamedKey},
 };
+use serde::Deserialize;
+
+// --- Race Discovery ---
+#[derive(Debug, Clone, Deserialize)]
+struct RaceMeta {
+    id: String,
+    name: String,
+    color: [f32; 4],
+    map_center_lat: f32,
+    map_center_lon: f32,
+}
+
+#[derive(Debug, Clone)]
+struct RaceEntry {
+    meta: RaceMeta,
+    profile_path: PathBuf,
+    global_path: PathBuf,
+}
+
+fn discover_races(data_dir: &Path) -> Vec<RaceEntry> {
+    let races_dir = data_dir.join("races");
+    let mut entries = Vec::new();
+    let Ok(dir) = std::fs::read_dir(&races_dir) else {
+        eprintln!("[WARN] data/races/ directory not found at {:?}", races_dir);
+        return entries;
+    };
+    let mut dirs: Vec<_> = dir.filter_map(|e| e.ok()).collect();
+    dirs.sort_by_key(|e| e.file_name());
+    for entry in dirs {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let meta_path = path.join("meta.json");
+        let profile_path = path.join("profile.bin");
+        let global_path = path.join("global.bin");
+        if !meta_path.exists() || !profile_path.exists() || !global_path.exists() {
+            eprintln!("[WARN] Skipping race {:?}: missing meta.json, profile.bin or global.bin", path.file_name().unwrap_or_default());
+            continue;
+        }
+        let Ok(json) = std::fs::read_to_string(&meta_path) else { continue; };
+        let Ok(meta) = serde_json::from_str::<RaceMeta>(&json) else {
+            eprintln!("[WARN] Invalid meta.json in {:?}", path);
+            continue;
+        };
+        entries.push(RaceEntry { meta, profile_path, global_path });
+    }
+    entries
+}
+
+fn find_data_dir() -> PathBuf {
+    // 1. Current directory
+    let cwd = std::env::current_dir().unwrap_or_default().join("data");
+    if cwd.join("races").exists() { return cwd; }
+    // 2. Executable directory
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("data");
+            if p.join("races").exists() { return p; }
+            // 3. One level up (for cargo run from project root — exe is in target/debug/)
+            if let Some(gp) = parent.parent() {
+                let p2 = gp.join("data");
+                if p2.join("races").exists() { return p2; }
+                if let Some(ggp) = gp.parent() {
+                    let p3 = ggp.join("data");
+                    if p3.join("races").exists() { return p3; }
+                }
+            }
+        }
+    }
+    cwd // fallback
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum AppPhase {
+    Menu,
+    Racing,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -184,6 +261,7 @@ struct State<'a> {
     selected_render_pipeline: wgpu::RenderPipeline,
     hover_render_pipeline: wgpu::RenderPipeline,
     sparkline_render_pipeline: wgpu::RenderPipeline,
+    sparkline_stroke_pipeline: wgpu::RenderPipeline,
     sparkline_fill_render_pipeline: wgpu::RenderPipeline,
     reticule_render_pipeline: wgpu::RenderPipeline,
     dot_render_pipeline: wgpu::RenderPipeline,
@@ -281,12 +359,20 @@ struct State<'a> {
     global_view_state: GlobalViewState,
     global_zoom_animation: Option<GlobalZoomAnimation>,
     camera_animation: Option<CameraAnimation>,
+
+    // Multi-race
+    race_color: [f32; 4],
+    race_name: String,
+    available_races: Vec<RaceEntry>,
+    current_race_idx: usize,
+    app_phase: AppPhase,
+    hovered_menu_idx: Option<usize>,
 }
 
 
 
 impl<'a> State<'a> {
-    async fn new(window: Arc<winit::window::Window>) -> State<'a> {
+    async fn new(window: Arc<winit::window::Window>, available_races: Vec<RaceEntry>, initial_race_idx: usize, app_phase: AppPhase) -> State<'a> {
         let size = window.inner_size();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -320,7 +406,15 @@ impl<'a> State<'a> {
         };
         surface.configure(&device, &config);
 
-        let compressed_data = include_bytes!("../data/profile.bin");
+        // --- Load race data dynamically ---
+        let initial_race = available_races.get(initial_race_idx)
+            .or_else(|| available_races.first())
+            .expect("No races available — check data/races/ directory");
+        let race_color = initial_race.meta.color;
+        let race_name = initial_race.meta.name.clone();
+
+        let compressed_data = std::fs::read(&initial_race.profile_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", initial_race.profile_path, e));
         let mut decoder = flate2::read::GzDecoder::new(&compressed_data[..]);
         let mut bin_data = Vec::new();
         use std::io::Read;
@@ -489,7 +583,8 @@ impl<'a> State<'a> {
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         use wgpu::util::DeviceExt;
 
-        let global_data = include_bytes!("../data/vue_globale.bin");
+        let global_data = std::fs::read(&initial_race.global_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", initial_race.global_path, e));
         let mut global_offset = 0;
         let fill_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
         let fill_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
@@ -641,6 +736,9 @@ impl<'a> State<'a> {
         // Sparkline pipeline
         let sparkline_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_yellow", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
+        // Sparkline stroke pipeline (white strokes)
+        let sparkline_stroke_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("Sparkline Stroke Pipeline"), layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_main", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
+
         // Sparkline fill pipeline
         let sparkline_fill_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("Sparkline Fill Pipeline"), layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sparkline_fill", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
@@ -697,7 +795,7 @@ impl<'a> State<'a> {
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
-            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, sparkline_fill_render_pipeline, reticule_render_pipeline,
+            ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, sparkline_stroke_pipeline, sparkline_fill_render_pipeline, reticule_render_pipeline,
             dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
@@ -718,11 +816,167 @@ impl<'a> State<'a> {
             sidebar_scroll_y: 0.0, sidebar_target_scroll_y: 0.0,
             slope_start: None, slope_end: None, slope_result: None,
             hover_stage_idx: None, global_view_state: GlobalViewState::Inactive, global_zoom_animation: None, camera_animation: None,
+            race_color, race_name, available_races, current_race_idx: initial_race_idx,
+            app_phase, hovered_menu_idx: None,
         };
 
         state.rebuild_ui();
         state.select_stage(0);
         state
+    }
+
+    fn load_race(&mut self, race_idx: usize) {
+        if race_idx >= self.available_races.len() { return; }
+        self.current_race_idx = race_idx;
+        let race = self.available_races[race_idx].clone();
+        self.race_color = race.meta.color;
+        self.race_name = race.meta.name.clone();
+
+        // 1. Load profile.bin
+        let compressed_data = std::fs::read(&race.profile_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", race.profile_path, e));
+        let mut decoder = flate2::read::GzDecoder::new(&compressed_data[..]);
+        let mut bin_data = Vec::new();
+        use std::io::Read;
+        decoder.read_to_end(&mut bin_data).expect("Failed to decompress profile.bin");
+        
+        let mut offset = 0;
+        let num_stages = u32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap());
+        offset += 4;
+
+        let mut stages = Vec::new();
+        for _ in 0..num_stages {
+            let read_string = |off: &mut usize| {
+                let len = u32::from_le_bytes(bin_data[*off..*off+4].try_into().unwrap()) as usize;
+                *off += 4;
+                let s = String::from_utf8(bin_data[*off..*off+len].to_vec()).unwrap();
+                *off += len;
+                s
+            };
+            let name = read_string(&mut offset);
+            let start = read_string(&mut offset);
+            let finish = read_string(&mut offset);
+            let date = read_string(&mut offset);
+
+            let max_dist = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let max_ele = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let min_ele = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let global_lx = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+            let global_ly = f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()); offset += 4;
+
+            let mut sparkline = Vec::with_capacity(60);
+            for _ in 0..60 {
+                sparkline.push(f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()));
+                offset += 4;
+            }
+
+            let num_vertices = u32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()) as usize; offset += 4;
+            let num_indices = u32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()) as usize; offset += 4;
+
+            let mut vertices = Vec::with_capacity(num_vertices);
+            for _ in 0..num_vertices {
+                vertices.push(f32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()));
+                offset += 4;
+            }
+            let mut indices = Vec::with_capacity(num_indices);
+            for _ in 0..num_indices {
+                indices.push(u32::from_le_bytes(bin_data[offset..offset+4].try_into().unwrap()));
+                offset += 4;
+            }
+
+            let mut profile_points = Vec::new();
+            for j in (0..num_vertices).step_by(26) { // 2 vertices per point, 13 floats per vertex
+                profile_points.push([vertices[j], vertices[j+1]]);
+            }
+
+            stages.push(Stage {
+                name, start, finish, date, max_dist, max_ele, min_ele, global_lx, global_ly,
+                sparkline, vertices, indices, profile_points
+            });
+        }
+        
+        let global_max_dist = stages.iter().map(|s| s.max_dist).fold(0.0, f32::max);
+        let global_max_ele = stages.iter().map(|s| s.max_ele).fold(0.0, f32::max);
+        let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max) * 1.2;
+
+        self.stages = stages;
+        self.global_max_dist = global_max_dist;
+        self.global_max_ele = global_max_ele;
+        self.global_max_ratio_diff = global_max_ratio_diff;
+
+        // 2. Load global.bin
+        let global_data = std::fs::read(&race.global_path)
+            .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", race.global_path, e));
+        let mut global_offset = 0;
+        let fill_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let fill_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let line_num_vertices = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+        let line_index_count = u32::from_le_bytes(global_data[global_offset..global_offset+4].try_into().unwrap()); global_offset += 4;
+
+        let fill_vertices_size = (fill_num_vertices * 8) as usize;
+        let fill_vertices = &global_data[global_offset..global_offset+fill_vertices_size]; global_offset += fill_vertices_size;
+        let fill_indices_size = (fill_index_count * 4) as usize;
+        let fill_indices = &global_data[global_offset..global_offset+fill_indices_size]; global_offset += fill_indices_size;
+
+        let line_vertices_size = (line_num_vertices * 32) as usize;
+        let line_vertices = &global_data[global_offset..global_offset+line_vertices_size]; global_offset += line_vertices_size;
+        let line_indices_size = (line_index_count * 4) as usize;
+        let line_indices = &global_data[global_offset..global_offset+line_indices_size];
+
+        use wgpu::util::DeviceExt;
+        self.global_fill_vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Fill Vertex Buffer"), contents: fill_vertices, usage: wgpu::BufferUsages::VERTEX
+        });
+        self.global_fill_index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Fill Index Buffer"), contents: fill_indices, usage: wgpu::BufferUsages::INDEX
+        });
+        self.global_vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Line Vertex Buffer"), contents: line_vertices, usage: wgpu::BufferUsages::VERTEX
+        });
+        self.global_index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Global Line Index Buffer"), contents: line_indices, usage: wgpu::BufferUsages::INDEX
+        });
+        self.global_fill_index_count = fill_index_count;
+        self.global_index_count = line_index_count;
+
+        // Reset UI indices & state
+        self.select_stage(0);
+        self.sidebar_scroll_y = 0.0;
+        self.sidebar_target_scroll_y = 0.0;
+        self.slope_start = None;
+        self.slope_end = None;
+        self.slope_result = None;
+        self.hover_stage_idx = None;
+        self.global_view_state = GlobalViewState::Inactive;
+        self.global_zoom_animation = None;
+        self.camera_animation = None;
+        self.animation = None;
+        self.morph_animation = None;
+        self.sidebar_animation = None;
+
+        self.rebuild_ui();
+    }
+
+    fn get_hovered_menu_card(&self) -> Option<usize> {
+        let cx = self.size.width as f32 / 2.0;
+        let cy = self.size.height as f32 / 2.0;
+        let n = self.available_races.len() as f32;
+        let start_y = cy + (n - 1.0) * 60.0;
+        
+        for i in 0..self.available_races.len() {
+            let y_center = start_y - (i as f32) * 120.0;
+            let x_min = cx - 250.0;
+            let x_max = cx + 250.0;
+            let y_min = y_center - 50.0;
+            let y_max = y_center + 50.0;
+            
+            if self.mouse_pos[0] >= x_min && self.mouse_pos[0] <= x_max
+                && self.mouse_pos[1] >= y_min && self.mouse_pos[1] <= y_max
+            {
+                return Some(i);
+            }
+        }
+        None
     }
 
     fn rebuild_ui(&mut self) {
@@ -1447,6 +1701,215 @@ impl<'a> State<'a> {
         let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+        if self.app_phase == AppPhase::Menu {
+            let uniforms = Uniforms {
+                view_proj: glam::Mat4::IDENTITY,
+                translate: [0.0, 0.0],
+                scale: 1.0,
+                thickness: 1.0,
+                resolution: [self.size.width as f32, self.size.height as f32],
+                y_stretch: 1.0,
+                morph: 0.0,
+                color: self.race_color, // Use currently selected race color for active accents
+                mouse_pos: [0.0, 0.0],
+                raw_mouse_x: -1000.0,
+                max_dist: 1.0,
+                y_min: 0.0,
+                y_max: 1.0,
+                rel_scale: 1.0,
+                camera_tilt: 0.0,
+                camera_heading: 0.0,
+                global_center_x: 0.0,
+                global_center_y: 0.0,
+                slope_x1: -1000.0,
+                slope_x2: -1000.0,
+                slope_y1: -1000.0,
+                slope_y2: -1000.0,
+                _pad: 0.0,
+            };
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+
+            let mut bg_vertices = Vec::new();
+            let mut add_rect = |x0: f32, y0: f32, x1: f32, y1: f32, list: &mut Vec<PolyVertex>| {
+                list.push(PolyVertex::new([x0, y0, 0.0, 0.0], 0.0));
+                list.push(PolyVertex::new([x1, y0, 0.0, 0.0], 0.0));
+                list.push(PolyVertex::new([x0, y1, 0.0, 0.0], 0.0));
+                list.push(PolyVertex::new([x0, y1, 0.0, 0.0], 0.0));
+                list.push(PolyVertex::new([x1, y0, 0.0, 0.0], 0.0));
+                list.push(PolyVertex::new([x1, y1, 0.0, 0.0], 0.0));
+            };
+
+            // Fullscreen backdrop
+            add_rect(0.0, 0.0, self.size.width as f32, self.size.height as f32, &mut bg_vertices);
+
+            // Cards background and borders
+            let cx = self.size.width as f32 / 2.0;
+            let cy = self.size.height as f32 / 2.0;
+            let n = self.available_races.len() as f32;
+            let start_y = cy + (n - 1.0) * 60.0;
+
+            let mut card_vertices = Vec::new();
+            let mut border_vertices = Vec::new();
+
+            for i in 0..self.available_races.len() {
+                let y_center = start_y - (i as f32) * 120.0;
+                let x_min = cx - 250.0;
+                let x_max = cx + 250.0;
+                let y_min = y_center - 50.0;
+                let y_max = y_center + 50.0;
+
+                // Card background
+                add_rect(x_min, y_min, x_max, y_max, &mut card_vertices);
+
+                // Card border (thickness 2.0)
+                let thick = 2.0f32;
+                let border_list = if self.hovered_menu_idx == Some(i) {
+                    &mut border_vertices // will be drawn in color (sparkline_render_pipeline)
+                } else {
+                    &mut card_vertices // will be drawn in dark grey (ui_render_pipeline)
+                };
+                
+                // Top
+                add_rect(x_min, y_max - thick, x_max, y_max, border_list);
+                // Bottom
+                add_rect(x_min, y_min, x_max, y_min + thick, border_list);
+                // Left
+                add_rect(x_min, y_min, x_min + thick, y_max, border_list);
+                // Right
+                add_rect(x_max - thick, y_min, x_max, y_max, border_list);
+            }
+
+            use wgpu::util::DeviceExt;
+            let backdrop_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::cast_slice(&bg_vertices), usage: wgpu::BufferUsages::VERTEX
+            });
+            let card_bg_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::cast_slice(&card_vertices), usage: wgpu::BufferUsages::VERTEX
+            });
+            let border_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::cast_slice(&border_vertices), usage: wgpu::BufferUsages::VERTEX
+            });
+
+            // Text
+            let mut menu_text_vertices = Vec::new();
+            if let Some(ref font) = self.fa {
+                // Title
+                let title = "CHOIX DE LA COURSE";
+                let (pos, uvs) = font.get_text_geometry(title);
+                let mut title_w = 0.0f32;
+                for c in title.chars() {
+                    if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                        title_w += m.advance;
+                    }
+                }
+                let title_size = 1.0f32;
+                let anchor = [cx - (title_w * title_size) / 2.0, cy + (n * 60.0) + 80.0];
+                for k in 0..(pos.len() / 2) {
+                    menu_text_vertices.push(TextVertex { pos: [pos[k*2], pos[k*2+1]], uv: [uvs[k*2], uvs[k*2+1]], anchor, size: title_size });
+                }
+
+                // Subtitle
+                let subtitle = "Sélectionnez une course à charger";
+                let (pos_sub, uvs_sub) = font.get_text_geometry(subtitle);
+                let mut sub_w = 0.0f32;
+                for c in subtitle.chars() {
+                    if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                        sub_w += m.advance;
+                    }
+                }
+                let sub_size = 0.45f32;
+                let anchor_sub = [cx - (sub_w * sub_size) / 2.0, anchor[1] - 40.0];
+                for k in 0..(pos_sub.len() / 2) {
+                    menu_text_vertices.push(TextVertex { pos: [pos_sub[k*2], pos_sub[k*2+1]], uv: [uvs_sub[k*2], uvs_sub[k*2+1]], anchor: anchor_sub, size: sub_size });
+                }
+
+                // Races
+                for (i, entry) in self.available_races.iter().enumerate() {
+                    let y_center = start_y - (i as f32) * 120.0;
+                    
+                    let name = &entry.meta.name;
+                    let (pos_n, uvs_n) = font.get_text_geometry(name);
+                    let anchor_n = [cx - 230.0, y_center + 10.0];
+                    for k in 0..(pos_n.len() / 2) {
+                        menu_text_vertices.push(TextVertex { pos: [pos_n[k*2], pos_n[k*2+1]], uv: [uvs_n[k*2], uvs_n[k*2+1]], anchor: anchor_n, size: 0.65 });
+                    }
+
+                    let info = if entry.meta.id == "tdf" {
+                        "Tour de France 2026  |  20 étapes"
+                    } else if entry.meta.id == "giro" {
+                        "Giro d'Italia 2026  |  21 étapes"
+                    } else {
+                        "Course cycliste  |  Fichiers de course détectés"
+                    };
+                    let (pos_i, uvs_i) = font.get_text_geometry(info);
+                    let anchor_i = [cx - 230.0, y_center - 25.0];
+                    for k in 0..(pos_i.len() / 2) {
+                        menu_text_vertices.push(TextVertex { pos: [pos_i[k*2], pos_i[k*2+1]], uv: [uvs_i[k*2], uvs_i[k*2+1]], anchor: anchor_i, size: 0.40 });
+                    }
+
+                    if self.hovered_menu_idx == Some(i) {
+                        let hint = "Charger ->";
+                        let (pos_h, uvs_h) = font.get_text_geometry(hint);
+                        let anchor_h = [cx + 140.0, y_center - 5.0];
+                        for k in 0..(pos_h.len() / 2) {
+                            menu_text_vertices.push(TextVertex { pos: [pos_h[k*2], pos_h[k*2+1]], uv: [uvs_h[k*2], uvs_h[k*2+1]], anchor: anchor_h, size: 0.45 });
+                        }
+                    }
+                }
+            }
+
+            let menu_text_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::cast_slice(&menu_text_vertices), usage: wgpu::BufferUsages::VERTEX
+            });
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Menu Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.05, g: 0.05, b: 0.06, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+
+                // Backdrop
+                pass.set_pipeline(&self.ui_render_pipeline);
+                pass.set_vertex_buffer(0, backdrop_buf.slice(..));
+                pass.draw(0..6, 0..1);
+
+                // Cards (Background + Neutral borders)
+                pass.set_vertex_buffer(0, card_bg_buf.slice(..));
+                pass.draw(0..(card_vertices.len() as u32), 0..1);
+
+                // Hovered borders (colored)
+                if !border_vertices.is_empty() {
+                    pass.set_pipeline(&self.sparkline_render_pipeline);
+                    pass.set_vertex_buffer(0, border_buf.slice(..));
+                    pass.draw(0..(border_vertices.len() as u32), 0..1);
+                }
+
+                // Texts
+                if let Some(ref bg) = self.atlas_bind_group {
+                    pass.set_pipeline(&self.text_screen_pipeline);
+                    pass.set_bind_group(1, bg, &[]);
+                    pass.set_vertex_buffer(0, menu_text_buf.slice(..));
+                    pass.draw(0..(menu_text_vertices.len() as u32), 0..1);
+                }
+            }
+
+            self.queue.submit(std::iter::once(encoder.finish()));
+            output.present();
+            return Ok(());
+        }
+
         let graph_height = (self.size.height as f64 - 260.0) * 0.5;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
         let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
@@ -1555,7 +2018,7 @@ impl<'a> State<'a> {
             resolution: [self.size.width as f32, self.size.height as f32],
             y_stretch: y_stretch as f32,
             morph: self.current_morph,
-            color: [1.0, 0.85, 0.0, 1.0], // Jaune TDF vif pour le stroke
+            color: self.race_color, // Couleur dynamique selon la course
             mouse_pos: [profile_x_screen, profile_y_screen],
             raw_mouse_x: if mouse_world_x >= 0.0 && mouse_world_x <= self.max_dist && self.mouse_pos[0] > 350.0 { self.mouse_pos[0] } else { -1000.0 },
             max_dist: self.max_dist,
@@ -1905,7 +2368,7 @@ impl<'a> State<'a> {
             pass.draw(0..self.num_spark_fill_vertices, 0..1);
 
             // 6. Sparklines Strokes
-            pass.set_pipeline(&self.sparkline_render_pipeline);
+            pass.set_pipeline(&self.sparkline_stroke_pipeline);
             pass.set_vertex_buffer(0, self.sparkline_buffer.slice(..));
             pass.draw(self.num_spark_fill_vertices..(self.num_spark_fill_vertices + self.num_spark_stroke_vertices), 0..1);
 
@@ -1959,116 +2422,154 @@ impl<'a> State<'a> {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let initial_race_id = args.windows(2)
+        .find(|w| w[0] == "--race")
+        .map(|w| w[1].clone());
+
     let event_loop = EventLoop::new().unwrap();
     let window = Arc::new(WindowBuilder::new()
-        .with_title("TDF 2026 - Profile")
+        .with_title("Cycling Visualizer")
         .build(&event_loop).unwrap());
     window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-    let mut state = pollster::block_on(State::new(Arc::clone(&window)));
+
+    let data_dir = find_data_dir();
+    let available_races = discover_races(&data_dir);
+    if available_races.is_empty() {
+        panic!("No races found in data/races/! Did you run the preprocessing scripts?");
+    }
+
+    let mut initial_race_idx = 0;
+    let mut start_in_menu = true;
+    if let Some(ref id) = initial_race_id {
+        if let Some(idx) = available_races.iter().position(|r| &r.meta.id == id) {
+            initial_race_idx = idx;
+            start_in_menu = false;
+        } else {
+            eprintln!("[WARN] Requested race '{}' not found, starting in menu", id);
+        }
+    }
+
+    let app_phase = if start_in_menu { AppPhase::Menu } else { AppPhase::Racing };
+
+    let mut state = pollster::block_on(State::new(Arc::clone(&window), available_races, initial_race_idx, app_phase));
+    
     event_loop.run(move |event, elwt| match event {
         Event::WindowEvent { ref event, window_id } if window_id == state.window.id() => match event {
             WindowEvent::CloseRequested => elwt.exit(),
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: key, state: ElementState::Pressed, .. }, .. } => {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
-                    
-                    Key::Named(NamedKey::Enter) => {
-                        state.slope_start = None;
-                        state.slope_end = None;
-                        state.slope_result = None;
-                        if state.global_view_state == GlobalViewState::Inactive {
-                            if state.view_mode == 0 {
-                                state.view_mode = 1;
-                                state.target_morph = 1.0;
-                                state.morph_animation = Some(MorphAnimation {
-                                    start_time: std::time::Instant::now(),
-                                    duration: std::time::Duration::from_millis(1400),
-                                    start_morph: state.current_morph,
-                                    target_morph: 1.0,
-                                });
-                            }
-                            
-                            let rpw = (state.size.width as f32) - 352.0;
-                            let target_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
-                            
-                            state.camera_animation = Some(CameraAnimation {
-                                start_time: std::time::Instant::now(),
-                                duration: std::time::Duration::from_millis(1400),
-                                start_angle: state.camera_angle,
-                                target_angle: [0.0, 0.0],
-                                start_offset: state.camera_offset,
-                                target_offset,
-                            });
-                            
-                            state.global_view_state = GlobalViewState::MorphingToTopDown;
-                            state.rebuild_ui();
-                        }
-                    }
-                    Key::Named(NamedKey::Space) => {
-                        state.slope_start = None;
-                        state.slope_end = None;
-                        state.slope_result = None;
-                        if state.global_view_state != GlobalViewState::Inactive {
-                            if state.global_view_state == GlobalViewState::ZoomingIn || state.global_view_state == GlobalViewState::MorphingTo2D {
-                                return; // Ignore space while already exiting
-                            }
-                            
-                            if state.global_view_state == GlobalViewState::MorphingToTopDown {
-                                state.global_view_state = GlobalViewState::Inactive;
-                                state.camera_animation = None;
-                                state.view_mode = 0;
-                                state.target_morph = 0.0;
-                                let rpw = (state.size.width as f64) - 350.0;
-                                state.pos_translate = [350.0 + rpw * 0.1, (state.size.height as f64 - 260.0) * 0.2];
-                                state.morph_animation = Some(MorphAnimation {
-                                    start_time: std::time::Instant::now(),
-                                    duration: std::time::Duration::from_millis(1400),
-                                    start_morph: state.current_morph,
-                                    target_morph: 0.0,
-                                });
-                            } else {
-                                state.global_view_state = GlobalViewState::ZoomingIn;
-                                let rpw = (state.size.width as f32) - 352.0;
-                                let graph_width = (rpw as f64) * 0.8;
-                                let target_scale = graph_width / (state.max_dist as f64);
-                                let c_x = 352.0 + rpw * 0.5;
-                                let c_y = state.size.height as f32 * 0.5;
-                                
-                                state.global_zoom_animation = Some(GlobalZoomAnimation {
-                                    start_time: std::time::Instant::now(),
-                                    duration: std::time::Duration::from_millis(2500),
-                                    start_scale: state.pos_scale,
-                                    target_scale,
-                                    start_center: [state.camera_offset[0], state.camera_offset[1]],
-                                    target_center: [c_x, c_y],
-                                });
-                            }
-                            state.rebuild_ui();
-                            return;
-                        }
-
-                        let target = if state.view_mode == 0 { 1.0 } else { 0.0 };
-                        state.morph_animation = Some(MorphAnimation {
-                            start_time: Instant::now(),
-                            duration: Duration::from_millis(1400),
-                            start_morph: state.current_morph,
-                            target_morph: target,
-                        });
-
-                        if state.view_mode == 0 {
-                            state.view_mode = 1;
-                            state.target_morph = 1.0;
-                            // Reset 3D camera to neutral top-down
-                            state.camera_angle = [0.0, 0.0];
-                            let rpw = (state.size.width as f32) - 352.0;
-                            state.camera_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
-                        } else {
-                            state.view_mode = 0;
-                            state.target_morph = 0.0;
-                        }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("m") => {
+                        state.app_phase = match state.app_phase {
+                            AppPhase::Menu => AppPhase::Racing,
+                            AppPhase::Racing => AppPhase::Menu,
+                        };
                         state.rebuild_ui();
                     }
-                    _ => {}
+                    _ => {
+                        if state.app_phase == AppPhase::Racing {
+                            match key {
+                                Key::Named(NamedKey::Enter) => {
+                                    state.slope_start = None;
+                                    state.slope_end = None;
+                                    state.slope_result = None;
+                                    if state.global_view_state == GlobalViewState::Inactive {
+                                        if state.view_mode == 0 {
+                                            state.view_mode = 1;
+                                            state.target_morph = 1.0;
+                                            state.morph_animation = Some(MorphAnimation {
+                                                start_time: std::time::Instant::now(),
+                                                duration: std::time::Duration::from_millis(1400),
+                                                start_morph: state.current_morph,
+                                                target_morph: 1.0,
+                                            });
+                                        }
+                                        
+                                        let rpw = (state.size.width as f32) - 352.0;
+                                        let target_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
+                                        
+                                        state.camera_animation = Some(CameraAnimation {
+                                            start_time: std::time::Instant::now(),
+                                            duration: std::time::Duration::from_millis(1400),
+                                            start_angle: state.camera_angle,
+                                            target_angle: [0.0, 0.0],
+                                            start_offset: state.camera_offset,
+                                            target_offset,
+                                        });
+                                        
+                                        state.global_view_state = GlobalViewState::MorphingToTopDown;
+                                        state.rebuild_ui();
+                                    }
+                                }
+                                Key::Named(NamedKey::Space) => {
+                                    state.slope_start = None;
+                                    state.slope_end = None;
+                                    state.slope_result = None;
+                                    if state.global_view_state != GlobalViewState::Inactive {
+                                        if state.global_view_state == GlobalViewState::ZoomingIn || state.global_view_state == GlobalViewState::MorphingTo2D {
+                                            return; // Ignore space while already exiting
+                                        }
+                                        
+                                        if state.global_view_state == GlobalViewState::MorphingToTopDown {
+                                            state.global_view_state = GlobalViewState::Inactive;
+                                            state.camera_animation = None;
+                                            state.view_mode = 0;
+                                            state.target_morph = 0.0;
+                                            let rpw = (state.size.width as f64) - 350.0;
+                                            state.pos_translate = [350.0 + rpw * 0.1, (state.size.height as f64 - 260.0) * 0.2];
+                                            state.morph_animation = Some(MorphAnimation {
+                                                start_time: std::time::Instant::now(),
+                                                duration: std::time::Duration::from_millis(1400),
+                                                start_morph: state.current_morph,
+                                                target_morph: 0.0,
+                                            });
+                                        } else {
+                                            state.global_view_state = GlobalViewState::ZoomingIn;
+                                            let rpw = (state.size.width as f32) - 352.0;
+                                            let graph_width = (rpw as f64) * 0.8;
+                                            let target_scale = graph_width / (state.max_dist as f64);
+                                            let c_x = 352.0 + rpw * 0.5;
+                                            let c_y = state.size.height as f32 * 0.5;
+                                            
+                                            state.global_zoom_animation = Some(GlobalZoomAnimation {
+                                                start_time: std::time::Instant::now(),
+                                                duration: std::time::Duration::from_millis(2500),
+                                                start_scale: state.pos_scale,
+                                                target_scale,
+                                                start_center: [state.camera_offset[0], state.camera_offset[1]],
+                                                target_center: [c_x, c_y],
+                                            });
+                                        }
+                                        state.rebuild_ui();
+                                        return;
+                                    }
+
+                                    let target = if state.view_mode == 0 { 1.0 } else { 0.0 };
+                                    state.morph_animation = Some(MorphAnimation {
+                                        start_time: Instant::now(),
+                                        duration: Duration::from_millis(1400),
+                                        start_morph: state.current_morph,
+                                        target_morph: target,
+                                    });
+
+                                    if state.view_mode == 0 {
+                                        state.view_mode = 1;
+                                        state.target_morph = 1.0;
+                                        // Reset 3D camera to neutral top-down
+                                        state.camera_angle = [0.0, 0.0];
+                                        let rpw = (state.size.width as f32) - 352.0;
+                                        state.camera_offset = [352.0 + rpw * 0.5, state.size.height as f32 * 0.5];
+                                    } else {
+                                        state.view_mode = 0;
+                                        state.target_morph = 0.0;
+                                    }
+                                    state.rebuild_ui();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             WindowEvent::Resized(s) => {
@@ -2079,36 +2580,41 @@ fn main() {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 state.mouse_pos = [position.x as f32, (state.size.height as f64 - position.y) as f32];
-                if state.mouse_pos[0] < 350.0 {
-                    let y_from_top = position.y as f32;
-                    let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
-                    if idx >= 0 && (idx as usize) < state.stages.len() {
-                        state.hover_stage_idx = Some(idx as usize);
+                if state.app_phase == AppPhase::Menu {
+                    state.hovered_menu_idx = state.get_hovered_menu_card();
+                    state.hover_stage_idx = None;
+                } else {
+                    if state.mouse_pos[0] < 350.0 {
+                        let y_from_top = position.y as f32;
+                        let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
+                        if idx >= 0 && (idx as usize) < state.stages.len() {
+                            state.hover_stage_idx = Some(idx as usize);
+                        } else {
+                            state.hover_stage_idx = None;
+                        }
                     } else {
                         state.hover_stage_idx = None;
                     }
-                } else {
-                    state.hover_stage_idx = None;
-                }
-                if state.mouse_pressed || state.right_mouse_pressed {
-                    let dx = position.x - state.last_mouse_pos[0] as f64;
-                    let dy = position.y - state.last_mouse_pos[1] as f64;
-                    
-                    if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {
-                        if state.right_mouse_pressed {
-                            // Rotation with Right Click
-                            let rel_scale = (state.pos_scale / state.initial_scale) as f32;
-                            let sensitivity = 0.005 / (rel_scale.max(1.0).sqrt());
-                            state.camera_angle[1] += (dx as f32) * sensitivity; 
-                            state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.5708); 
+                    if state.mouse_pressed || state.right_mouse_pressed {
+                        let dx = position.x - state.last_mouse_pos[0] as f64;
+                        let dy = position.y - state.last_mouse_pos[1] as f64;
+                        
+                        if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {
+                            if state.right_mouse_pressed {
+                                // Rotation with Right Click
+                                let rel_scale = (state.pos_scale / state.initial_scale) as f32;
+                                let sensitivity = 0.005 / (rel_scale.max(1.0).sqrt());
+                                state.camera_angle[1] += (dx as f32) * sensitivity; 
+                                state.camera_angle[0] = (state.camera_angle[0] - (dy as f32) * sensitivity).clamp(0.0, 1.5708); 
+                            } else if state.mouse_pressed {
+                                // Panning in 3D with Left Click
+                                state.camera_offset[0] += dx as f32;
+                                state.camera_offset[1] -= dy as f32;
+                            }
                         } else if state.mouse_pressed {
-                            // Panning in 3D with Left Click
-                            state.camera_offset[0] += dx as f32;
-                            state.camera_offset[1] -= dy as f32;
+                            state.pos_translate[0] += dx;
+                            state.pos_translate[1] -= dy;
                         }
-                    } else if state.mouse_pressed {
-                        state.pos_translate[0] += dx;
-                        state.pos_translate[1] -= dy;
                     }
                 }
                 state.last_mouse_pos = [position.x as f32, position.y as f32];
@@ -2118,40 +2624,48 @@ fn main() {
                     state.mouse_pressed = *s == ElementState::Pressed;
                     
                     if state.mouse_pressed {
-                        if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
-                            // Slope Calculation with Ctrl + Left Click
-                            let p = state.get_profile_at_mouse();
-                            if state.slope_result.is_some() {
-                                state.slope_start = Some(p);
-                                state.slope_end = None;
-                                state.slope_result = None;
-                            } else if let Some(start) = state.slope_start {
-                                let dist_diff = (p[0] - start[0]).abs();
-                                let ele_diff = p[1] - start[1];
-                                if dist_diff > 0.1 {
-                                    let slope = (ele_diff / dist_diff) * 100.0;
-                                    state.slope_result = Some((slope, dist_diff, ele_diff));
-                                    state.slope_end = Some(p);
+                        if state.app_phase == AppPhase::Menu {
+                            if let Some(idx) = state.hovered_menu_idx {
+                                state.load_race(idx);
+                                state.app_phase = AppPhase::Racing;
+                                state.mouse_pressed = false; // reset
+                            }
+                        } else {
+                            if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
+                                // Slope Calculation with Ctrl + Left Click
+                                let p = state.get_profile_at_mouse();
+                                if state.slope_result.is_some() {
+                                    state.slope_start = Some(p);
+                                    state.slope_end = None;
+                                    state.slope_result = None;
+                                } else if let Some(start) = state.slope_start {
+                                    let dist_diff = (p[0] - start[0]).abs();
+                                    let ele_diff = p[1] - start[1];
+                                    if dist_diff > 0.1 {
+                                        let slope = (ele_diff / dist_diff) * 100.0;
+                                        state.slope_result = Some((slope, dist_diff, ele_diff));
+                                        state.slope_end = Some(p);
+                                    } else {
+                                        state.slope_start = None;
+                                        state.slope_end = None;
+                                        state.slope_result = None;
+                                    }
                                 } else {
+                                    state.slope_start = Some(p);
+                                    state.slope_end = None;
+                                    state.slope_result = None;
+                                }
+                                state.rebuild_ui();
+                            } else if state.mouse_pos[0] < 350.0 {
+                                // Sidebar selection
+                                let y_from_top = state.size.height as f32 - state.mouse_pos[1];
+                                let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
+                                if idx >= 0 && (idx as usize) < state.stages.len() {
+                                    state.select_stage(idx as usize);
                                     state.slope_start = None;
                                     state.slope_end = None;
                                     state.slope_result = None;
                                 }
-                            } else {
-                                state.slope_start = Some(p);
-                                state.slope_end = None;
-                                state.slope_result = None;
-                            }
-                            state.rebuild_ui();
-                        } else if state.mouse_pos[0] < 350.0 {
-                            // Sidebar selection
-                            let y_from_top = state.size.height as f32 - state.mouse_pos[1];
-                            let idx = ((y_from_top - 40.0 + state.sidebar_scroll_y) / 260.0) as i32;
-                            if idx >= 0 && (idx as usize) < state.stages.len() {
-                                state.select_stage(idx as usize);
-                                state.slope_start = None;
-                                state.slope_end = None;
-                                state.slope_result = None;
                             }
                         }
                     }
@@ -2166,6 +2680,9 @@ fn main() {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if state.app_phase == AppPhase::Menu {
+                    return;
+                }
                 if state.mouse_pos[0] < 350.0 {
                     let amount = match delta { MouseScrollDelta::LineDelta(_, y) => *y as f32 * 250.0, MouseScrollDelta::PixelDelta(p) => p.y as f32 * 2.0 };
                     let max_scroll = ((state.stages.len() as f32 * 260.0) - (state.size.height as f32 - 100.0)).max(0.0);
@@ -2191,9 +2708,6 @@ fn main() {
                 let target_scale = (state.pos_scale * factor).clamp(min_scale, state.initial_scale * 500.0);
 
                 if state.view_mode == 1 || state.global_view_state == GlobalViewState::FullyGlobal {
-                    // === ZOOM 3D animé centré sur la souris ===
-                    // screen_pt = world_rotated * scale + camera_offset
-                    // Pour fixer le point sous la souris : camera_offset_new = mouse + (camera_offset - mouse) * new_scale/old_scale
                     let mx = state.mouse_pos[0];
                     let my = state.mouse_pos[1];
                     let scale_factor = (target_scale / state.pos_scale) as f32;
@@ -2201,7 +2715,6 @@ fn main() {
                         mx + (state.camera_offset[0] - mx) * scale_factor,
                         my + (state.camera_offset[1] - my) * scale_factor,
                     ];
-                    // Animer scale + camera_offset simultanément avec easing
                     state.animation = Some(ZoomAnimation {
                         start_time: Instant::now(),
                         duration: Duration::from_millis(300),
@@ -2211,7 +2724,6 @@ fn main() {
                         target_translate: [target_offset[0] as f64, target_offset[1] as f64],
                     });
                 } else {
-                    // === ZOOM 2D animé centré sur la souris ===
                     let target_translate = if target_scale == state.initial_scale {
                         let rpw = (state.size.width as f64) - 350.0;
                         [350.0 + rpw * 0.1, (state.size.height as f64) * 0.25]

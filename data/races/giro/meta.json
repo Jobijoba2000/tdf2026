@@ -1,0 +1,12 @@
+{
+  "id": "giro",
+  "name": "Giro d'Italia 2026",
+  "color": [
+    1,
+    0.6,
+    0.72,
+    1
+  ],
+  "map_center_lat": 42.5,
+  "map_center_lon": 12.5
+}
