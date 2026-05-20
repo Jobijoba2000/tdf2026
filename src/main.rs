@@ -2793,13 +2793,7 @@ fn main() {
                                 state.mouse_pressed = false; // reset
                             }
                         } else {
-                            let rpw = state.size.width as f32 - 352.0;
-                            let header_w = rpw * 0.5;
-                            if state.mouse_pos[0] >= 355.0 && state.mouse_pos[0] <= 355.0 + header_w && state.mouse_pos[1] >= state.size.height as f32 - 180.0 && state.mouse_pos[1] <= state.size.height as f32 - 5.0 {
-                                state.app_phase = AppPhase::Menu;
-                                state.mouse_pressed = false;
-                                state.rebuild_ui();
-                            } else if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
+                            if state.view_mode == 0 && state.global_view_state == GlobalViewState::Inactive && state.ctrl_pressed && state.mouse_pos[0] >= 352.0 {
                                 // Slope Calculation with Ctrl + Left Click
                                 let p = state.get_profile_at_mouse();
                                 if state.slope_result.is_some() {
