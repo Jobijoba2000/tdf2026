@@ -258,7 +258,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_axes(in: VertexOutput) -> @location(0) vec4<f32> {
     let alpha = clamp(1.0 - in.morph * 2.0, 0.0, 1.0); // Disparaît vite
-    return vec4<f32>(uniforms.color.rgb, uniforms.color.a * alpha);
+    return vec4<f32>(1.0, 1.0, 1.0, alpha);
 }
 
 struct TextVertexInput {

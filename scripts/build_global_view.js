@@ -15,8 +15,10 @@ const raceId = args[raceArgIdx + 1];
 const RACE_CONFIGS = {
     tdf: {
         geojsonPath: path.join(__dirname, '../data/geojson/gadm41_FRA_0.geojson'),
-        gpxMode: 'single',
-        gpxPath: path.join(__dirname, '../data/gpx/tour-de-france-2026.gpx'),
+        gpxMode: 'multi',
+        gpxDir: path.join(__dirname, '../data/gpx/tour-de-france-2026'),
+        gpxPrefix: 'etappe-',
+        numStages: 21,
         globalLat: 46.5,
         globalLon: 2.5,
     },
@@ -38,15 +40,7 @@ const RACE_CONFIGS = {
         globalLat: 40.0,
         globalLon: -3.5,
     },
-    tdf_v2: {
-        geojsonPath: path.join(__dirname, '../data/geojson/gadm41_FRA_0.geojson'),
-        gpxMode: 'multi',
-        gpxDir: path.join(__dirname, '../data/gpx/tour-de-france-2026-v2'),
-        gpxPrefix: 'etappe-',
-        numStages: 21,
-        globalLat: 46.5,
-        globalLon: 2.5,
-    },
+
 };
 
 if (!RACE_CONFIGS[raceId]) {
