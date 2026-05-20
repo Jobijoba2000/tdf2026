@@ -1,22 +1,24 @@
-# 🚴‍♂️ Cycling Visualizer — Visualiseur de Profils 2D/3D Interactif
+# 🚴‍♂️ Cycling Visualizer
 
-Une application de bureau ultra-performante développée en **Rust**, permettant de visualiser de manière interactive les étapes du **Tour de France 2026** ainsi que d'autres courses majeures (**Giro d'Italia 2026** et **Vuelta a España 2026**). Propulsée par **wgpu** (WebGPU pour Rust) et **glam**, elle offre un rendu graphique 3D en temps réel à 60 FPS avec des transitions animées fluides (morphing) et une interface utilisateur haut de gamme.
+Application de visualisation de tracés et de profils altimétriques de courses cyclistes (Tour de France 2026, Giro 2026, Vuelta 2026). Développée en Rust avec l'API graphique wgpu.
 
 https://github.com/user-attachments/assets/6d848c80-9903-4a48-ad48-35eae3c320f3
+
 
 ---
 
 ## 🌟 Fonctionnalités Principales
 
-* **Visualisation Multi-Courses** : Naviguez et changez instantanément de course entre le Tour de France, le Giro d'Italia et la Vuelta a España via un menu d'accueil dynamique (touche **M**).
-* **Profils 2D Détaillés** : Affichage précis de la courbe d'altitude de chaque étape en fonction de sa distance.
-* **Calculateur de Pente Interactif** : Maintenez la touche **Ctrl** et faites un **clic gauche** sur le profil pour définir un point de départ, puis un second Ctrl+clic pour le point d'arrivée : l'application trace instantanément une zone rouge de sélection et calcule le pourcentage moyen de la pente, la distance et le dénivelé. Pour annuler ou quitter ce mode à tout moment, effectuez un simple **clic droit** sur le profil.
-* **Morphing 2D ➡️ 3D** : Transition animée fluide passant d'une courbe de profil 2D à un tracé 3D extrudé et surélevé dans l'espace.
-* **Caméra 3D Libre** : Rotation, inclinaison et zoom ultra-fluides avec gestion de l'inertie physique pour une navigation naturelle.
-* **Carte Globale interactive** : Basculez sur la vue "France/Italie/Espagne" pour afficher la carte entière du pays et le tracé géographique exact de toutes les étapes de la course sélectionnée.
-* **Thèmes & Couleurs Personnalisables** : Basculez d'une seule touche entre les couleurs officielles de chaque course (Jaune TDF, Rose Giro, Rouge Vuelta) et une couleur alternative vert néon très contrastée.
-* **Dashboard Premium & Barre Latérale** : Une colonne latérale élégante affichant les cartes de chaque étape avec leur date, distance et un profil simplifié (sparkline) dont le remplissage et les contours s'harmonisent parfaitement avec le graphique principal.
-* **Typographie Haute Clarté** : Intégration de caractères accentués multilingues (comme le "ñ" de España) et d'un lissage de texte avec effet de gras et contour noir pour une lisibilité parfaite dans toutes les résolutions.
+* **Visualisation Multi-Courses** : Changement instantané de course entre le Tour de France, le Giro d'Italia et la Vuelta a España via un menu d'accueil (touche **M**).
+* **Profils 2D Détaillés** : Courbe d'altitude de chaque étape en fonction de sa distance.
+* **Calculateur de Pente Interactif** : En maintenant la touche **Ctrl**, faites un **clic gauche** sur le profil pour définir le point de départ et le point d'arrivée. L'application calcule le pourcentage moyen, la distance et le dénivelé. Faites un **clic droit** pour réinitialiser la sélection.
+* **Morphing 2D ➡️ 3D** : Transition animée entre le profil 2D et le tracé 3D géolocalisé.
+* **Caméra 3D** : Rotation, inclinaison et zoom libres avec gestion de l'inertie.
+* **Carte Globale** : Affichage de la carte du pays et du tracé géographique de toutes les étapes de la course.
+* **Couleurs Personnalisées** : Basculement entre les couleurs officielles de chaque course (Jaune TDF, Rose Giro, Rouge Vuelta) et une version néon à fort contraste.
+* **Barre Latérale** : Liste des étapes avec date, distance et aperçu miniature (sparkline).
+* **Support Multilingue & Rendu du Texte** : Gestion des caractères accentués (comme le "ñ" de España) et lissage avec effet de contour noir pour la lisibilité.
+
 
 ---
 
