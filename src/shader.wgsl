@@ -1,6 +1,7 @@
 struct Uniforms {
-    view_proj: mat4x4<f32>,    // 0-64
-    translate: vec2<f32>,      // 64-72
+    view_proj: mat4x4<f32>,            // 0-64
+    light_space_matrix: mat4x4<f32>,   // 64-128
+    translate: vec2<f32>,              // 128-136
     scale: f32,                // 72-76
     thickness: f32,            // 76-80
     resolution: vec2<f32>,     // 80-88
@@ -26,6 +27,10 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+// --- SHADOW BINDINGS ---
+@group(1) @binding(0) var t_shadow: texture_depth_2d;
+@group(1) @binding(1) var sampler_shadow: sampler_comparison;
+
 struct VertexInput {
     @location(0) pos: vec4<f32>,   // dist, ele, lx, ly
     @location(1) prev: vec4<f32>,
@@ -48,6 +53,7 @@ struct VertexOutput {
     @location(3) dist: f32,
     @location(4) morph: f32,
     @location(5) normal: vec3<f32>,
+    @location(6) shadow_pos: vec4<f32>,
 };
 
 fn project_2d(dist: f32, ele: f32) -> vec2<f32> {
@@ -152,8 +158,23 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     out.dist = model.pos.x;
     out.morph = local_morph;
     out.normal = vec3<f32>(model.normal, 0.0);
+    
+    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 * local_morph;
+    let world_pos_morphed = vec4<f32>(model.pos.z, model.pos.w, z_morphed, 1.0);
+    out.shadow_pos = uniforms.light_space_matrix * world_pos_morphed;
+    
     return out;
 }
+
+@vertex
+fn vs_shadow(model: PolyVertexInput) -> @builtin(position) vec4<f32> {
+    let stagger = 0.5;
+    let local_morph = clamp((uniforms.morph * (1.0 + stagger)) - (model.pos.x / uniforms.max_dist) * stagger, 0.0, 1.0);
+    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 * local_morph;
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, z_morphed, 1.0);
+    return uniforms.light_space_matrix * world_pos;
+}
+
 
 @vertex
 fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
@@ -235,7 +256,34 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Éclat additif très léger (blancs)
     let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
-    let final_color = base_color * final_lighting + vec3<f32>(shine);
+    var final_color = base_color * final_lighting + vec3<f32>(shine);
+    
+    // --- OMBRES PORTÉES DU PROFIL SUR LE PROFIL ---
+    let shadow_coords = in.shadow_pos.xyz / in.shadow_pos.w;
+    let uv_shadow = vec2<f32>(
+        shadow_coords.x * 0.5 + 0.5,
+        1.0 - (shadow_coords.y * 0.5 + 0.5)
+    );
+    let depth_shadow = shadow_coords.z;
+    
+    var shadow_factor: f32 = 1.0;
+    if (uv_shadow.x >= 0.0 && uv_shadow.x <= 1.0 && uv_shadow.y >= 0.0 && uv_shadow.y <= 1.0 && depth_shadow <= 1.0) {
+        let bias = mix(0.0035, 0.0012, step(0.5, in.uv.y));
+        var shadow_accum: f32 = 0.0;
+        let texel_size: f32 = 1.0 / 2048.0;
+        
+        for (var dy: f32 = -1.0; dy <= 1.0; dy += 1.0) {
+            for (var dx: f32 = -1.0; dx <= 1.0; dx += 1.0) {
+                let offset = vec2<f32>(dx, dy) * texel_size;
+                shadow_accum += textureSampleCompare(t_shadow, sampler_shadow, uv_shadow + offset, depth_shadow - bias);
+            }
+        }
+        shadow_factor = shadow_accum / 9.0;
+    }
+    
+    let shadow_mult = mix(0.72, 1.0, shadow_factor);
+    let self_shadow_attenuation = mix(1.0, shadow_mult, in.morph);
+    final_color = final_color * self_shadow_attenuation;
     
     return vec4<f32>(final_color, 1.0);
 }
@@ -487,11 +535,18 @@ fn vs_global(model: GlobalVertexInput) -> GlobalVertexOutput {
     return out;
 }
 
+struct GlobalFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) shadow_pos: vec4<f32>,
+};
+
 @vertex
-fn vs_global_fill(@location(0) pos: vec2<f32>) -> @builtin(position) vec4<f32> {
+fn vs_global_fill(@location(0) pos: vec2<f32>) -> GlobalFillOutput {
+    var out: GlobalFillOutput;
     let p_model = vec4<f32>(pos.x - uniforms.global_center_x, pos.y - uniforms.global_center_y, 0.0, 1.0);
-    let p_clip = uniforms.view_proj * p_model;
-    return p_clip;
+    out.clip_position = uniforms.view_proj * p_model;
+    out.shadow_pos = uniforms.light_space_matrix * p_model;
+    return out;
 }
 
 @fragment
@@ -500,6 +555,6 @@ fn fs_global(in: GlobalVertexOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_global_fill() -> @location(0) vec4<f32> {
-    return vec4<f32>(0.26, 0.26, 0.26, 1.0); // #444
+fn fs_global_fill(in: GlobalFillOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.26, 0.26, 0.26, 1.0);
 }
