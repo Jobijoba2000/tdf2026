@@ -39,11 +39,11 @@ cargo run --release
 
 ---
 
-## 📦 Générer un Exécutable `.exe` Autonome (Windows)
+## 📦 Générer l'Exécutable et Distribuer l'Application (Windows)
 
-L'une des grandes forces de cette application est sa portabilité absolue. Tous les fichiers de ressources (données géographiques des étapes, tracés 3D, courbes simplifiées, et polices d'écriture) sont compressés et intégrés **directement à l'intérieur du binaire** lors de la compilation grâce au mécanisme `include_bytes!` de Rust.
+Bien que la police de caractères (`font.ttf`) soit directement intégrée à l'exécutable lors de la compilation pour simplifier le rendu, les données géographiques et de profils des courses (`profile.bin` et `global.bin`) sont lues dynamiquement depuis le disque au démarrage de l'application.
 
-Pour générer l'exécutable autonome :
+Pour compiler le projet :
 ```bash
 cargo build --release
 ```
@@ -53,7 +53,27 @@ Une fois la compilation terminée, vous obtiendrez le fichier exécutable à cet
 target/release/cycling-visualizer.exe
 ```
 
-**Note importante :** Ce fichier `.exe` est **100% autonome**. Vous pouvez le copier, le renommer, et l'envoyer sur n'importe quel ordinateur Windows sans avoir besoin de copier le dossier `data/` ou tout autre fichier externe. L'application démarrera instantanément avec toutes ses ressources intégrées !
+**Distribution de l'application :**
+Pour faire fonctionner l'application sur un autre ordinateur Windows, vous devez distribuer l'exécutable `cycling-visualizer.exe` **accompagné de son dossier de données** `data/races/`. 
+
+Un script d'exportation automatisé est fourni à la racine. Pour compiler l'application en mode Release et packager automatiquement l'exécutable avec son dossier de données, il vous suffit de lancer la commande suivante dans votre terminal Windows :
+```cmd
+export
+```
+*(ou double-cliquez sur `export.bat` à la racine)*. Cela va générer un dossier d'exportation prêt à être distribué sous `exports/cycling-visualizer/`.
+
+L'arborescence minimale de distribution finale doit ressembler à ceci :
+```text
+├── cycling-visualizer.exe
+└── data/
+    └── races/
+        ├── tdf/
+        │   ├── meta.json
+        │   ├── profile.bin
+        │   └── global.bin
+        ├── giro/
+        └── vuelta/
+```
 
 ---
 

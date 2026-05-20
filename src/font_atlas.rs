@@ -11,9 +11,7 @@ const PADDING: u32 = 3;
 pub struct GlyphMetrics {
     pub advance: f32,   // largeur d'avancement (en px à FONT_SIZE)
     pub width: u32,     // largeur du quad (avec padding)
-    pub height: u32,    // hauteur du quad (avec padding)
     pub ox: f32,        // offset x (xmin)
-    pub oy: f32,        // offset y (ymin)
     pub u0: f32, pub v0: f32,
     pub u1: f32, pub v1: f32,
 }
@@ -29,11 +27,6 @@ pub struct FontAtlas {
 const CHARACTERS: &str = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àâéèêëîïôûùçÀÂÉÈÊËÎÏÔÛÙÇñÑíÍáÁóÓúÚ-.,\\'()?!:;/@#$%^&*=_+[]{}<>|";
 
 impl FontAtlas {
-    pub fn from_file(path: &str) -> Option<Self> {
-        let font_data = std::fs::read(path).ok()?;
-        Self::from_bytes(&font_data)
-    }
-
     pub fn from_bytes(font_data: &[u8]) -> Option<Self> {
         let font = fontdue::Font::from_bytes(font_data, fontdue::FontSettings::default()).ok()?;
 
@@ -103,9 +96,7 @@ impl FontAtlas {
             metrics_map.insert(c, GlyphMetrics {
                 advance: char_advances.get(&c).cloned().unwrap_or(0.0),
                 width: w,
-                height: row_height,
                 ox: gm.bounds.xmin,
-                oy: gm.bounds.ymin,
                 u0, v0, u1, v1,
             });
 
@@ -158,25 +149,5 @@ impl FontAtlas {
         (positions, uvs)
     }
 
-    /// Calcule la taille (uSize) pour un label, depuis la largeur world du polygone
-    pub fn compute_label_size(&self, name: &str, poly_width_at_center: f32) -> f32 {
-        let mut total_advance = 0.0f32;
-        for c in name.chars() {
-            if let Some(m) = self.metrics.get(&c).or_else(|| self.metrics.get(&' ')) {
-                total_advance += m.advance;
-            }
-        }
-        if total_advance == 0.0 { return 0.001; }
 
-        // La taille de base pour que le texte occupe 80% de la largeur centrale
-        let base_size = (poly_width_at_center * 0.8) / total_advance;
-
-        // Pondération demandée : < 10 chars (75%), < 13 chars (90%), sinon 100%
-        let char_count = name.chars().count();
-        let mult = if char_count < 10 { 0.75 }
-                   else if char_count < 13 { 0.90 }
-                   else { 1.0 };
-
-        (base_size * mult).max(1e-12)
-    }
 }

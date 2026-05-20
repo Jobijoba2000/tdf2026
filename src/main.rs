@@ -19,8 +19,6 @@ struct RaceMeta {
     id: String,
     name: String,
     color: [f32; 4],
-    map_center_lat: f32,
-    map_center_lon: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -265,8 +263,6 @@ struct State<'a> {
     sparkline_stroke_pipeline: wgpu::RenderPipeline,
     sparkline_fill_render_pipeline: wgpu::RenderPipeline,
     reticule_render_pipeline: wgpu::RenderPipeline,
-    dot_render_pipeline: wgpu::RenderPipeline,
-    header_render_pipeline: wgpu::RenderPipeline,
     axes_render_pipeline: wgpu::RenderPipeline,
     global_render_pipeline: wgpu::RenderPipeline,
     global_fill_render_pipeline: wgpu::RenderPipeline,
@@ -295,8 +291,6 @@ struct State<'a> {
     selected_bg_buffer: wgpu::Buffer,
     hover_bg_buffer: wgpu::Buffer,
     header_text_buffer: wgpu::Buffer,
-    header_bg_buffer: wgpu::Buffer,
-    header_border_buffer: wgpu::Buffer,
     global_vertex_buffer: wgpu::Buffer,
     global_index_buffer: wgpu::Buffer,
     global_fill_vertex_buffer: wgpu::Buffer,
@@ -306,7 +300,6 @@ struct State<'a> {
     num_indices: u32,
     num_poly_indices: u32,
     num_axes_indices: u32,
-    num_axes_vertices: u32,
     num_static_text_vertices: u32,
     num_stage_border_vertices: u32,
     num_spark_vertices: u32,
@@ -314,7 +307,6 @@ struct State<'a> {
     num_spark_stroke_vertices: u32,
     num_sidebar_text_vertices: u32,
     num_header_text_vertices: u32,
-    num_header_border_vertices: u32,
     global_index_count: u32,
     global_fill_index_count: u32,
 
@@ -525,45 +517,6 @@ impl<'a> State<'a> {
         queue.write_buffer(&poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices));
 
         let fa = font_atlas::FontAtlas::from_bytes(include_bytes!("../data/fonts/font.ttf"));
-        
-        // Sidebar text
-        let mut sidebar_text_vertices = Vec::new();
-        if let Some(ref font) = fa {
-            // Title
-            let title = "TOUR DE FRANCE 2026";
-            let (pos, uvs) = font.get_text_geometry(title);
-            let anchor = [80.0, size.height as f32 - 35.0];
-            for i in 0..(pos.len() / 2) {
-                sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.5 });
-            }
-
-            for (idx, stage) in stages.iter().enumerate() {
-                let y_top = size.height as f32 - 60.0 - (idx as f32 * 135.0);
-                
-                // Name
-                let name_txt = format!("{}. {}", idx + 1, stage.name);
-                let (pos, uvs) = font.get_text_geometry(&name_txt);
-                let anchor = [80.0, y_top - 20.0];
-                for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.4 });
-                }
-
-                // Cities
-                let cities_txt = format!("{} > {}", stage.start, stage.finish);
-                let (pos, uvs) = font.get_text_geometry(&cities_txt);
-                let anchor = [80.0, y_top - 45.0];
-                for i in 0..(pos.len() / 2) {
-                    sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor, size: 0.25 });
-                }
-
-                // Date & Dist
-                let date_txt = format!("{}  |  {:.1} km", stage.date, stage.max_dist / 1000.0);
-                let (_pos, _uvs) = font.get_text_geometry(&date_txt);
-                let _anchor = [80.0, y_top - 65.0];
-                for _i in 0..(_pos.len() / 2) {
-                }
-            }
-        }
 
         let sidebar_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -572,7 +525,6 @@ impl<'a> State<'a> {
         let static_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: std::mem::size_of::<Uniforms>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let _sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 4096, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let stage_borders_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 65536, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None }] });
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { layout: &uniform_bind_group_layout, entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform_buffer.as_entire_binding() }], label: None });
@@ -815,7 +767,6 @@ impl<'a> State<'a> {
         let text_ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&text_pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_text_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_text_graph", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
         let reticule_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_reticule", buffers: &[] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_reticule", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let dot_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_dot", buffers: &[wgpu::VertexBufferLayout { array_stride: 28, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_dot", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let sidebar_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let sidebar_bg_data = [
             PolyVertex::new([0.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([350.0, 0.0, 0.0, 0.0], 0.0), PolyVertex::new([0.0, size.height as f32, 0.0, 0.0], 0.0),
@@ -825,7 +776,6 @@ impl<'a> State<'a> {
         ];
         queue.write_buffer(&sidebar_bg_buffer, 0, bytemuck::cast_slice(&sidebar_bg_data));
         let ui_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
-        let header_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_header_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let selected_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_selected_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let hover_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: None, layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sidebar_bg", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
         let axes_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { 
@@ -894,21 +844,19 @@ impl<'a> State<'a> {
         let global_max_ratio_diff = stages.iter().map(|s| (s.max_ele - s.min_ele) / s.max_dist).fold(0.0f32, f32::max) * 1.2;
 
         let header_text_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024 * 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let header_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let header_border_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 8192, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut state = State {
             surface, device, queue, config, size, window,
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, sparkline_stroke_pipeline, sparkline_fill_render_pipeline, reticule_render_pipeline,
-            dot_render_pipeline, header_render_pipeline, axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
+            axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             shadow_texture_view, shadow_bind_group, shadow_render_pipeline,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
             sidebar_bg_buffer, sidebar_text_buffer, sparkline_buffer, stage_borders_buffer,
-            selected_bg_buffer, hover_bg_buffer, header_text_buffer, header_bg_buffer, header_border_buffer, global_vertex_buffer, global_index_buffer,
+            selected_bg_buffer, hover_bg_buffer, header_text_buffer, global_vertex_buffer, global_index_buffer,
             global_fill_vertex_buffer, global_fill_index_buffer,
-            num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_axes_vertices: 0, num_static_text_vertices: 0,
-            num_stage_border_vertices: 0, num_spark_vertices: 0, num_spark_fill_vertices: 0, num_spark_stroke_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, num_header_border_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
+            num_indices: active_stage.indices.len() as u32, num_poly_indices: 0, num_axes_indices: 0, num_static_text_vertices: 0,
+            num_stage_border_vertices: 0, num_spark_vertices: 0, num_spark_fill_vertices: 0, num_spark_stroke_vertices: 0, num_sidebar_text_vertices: 0, num_header_text_vertices: 0, global_index_count: line_index_count, global_fill_index_count: fill_index_count,
             profile_points, smooth_normals: Vec::new(), max_dist, min_ele, max_ele, global_max_dist, global_max_ele, global_max_ratio_diff,
             mouse_pos: [0.0, 0.0], mouse_pressed: false, right_mouse_pressed: false, last_mouse_pos: [0.0, 0.0],
             pos_translate: [0.0, 0.0], pos_scale: 1.0, initial_scale: 1.0,
@@ -1150,14 +1098,7 @@ impl<'a> State<'a> {
                     sidebar_text_vertices.push(TextVertex { pos: [pos[i*2], pos[i*2+1]], uv: [uvs[i*2], uvs[i*2+1]], anchor: anchor_i, size: 0.33 });
                 }
 
-                // 4. Sparklines (Profil simplifié) avec formule proportionnelle
-                let width = 310.0;
-                // Hauteur calculée pour que l'angle des pentes soit identique au graphique détaillé
-                let graph_width = self.size.width as f32 - 500.0;
-                let graph_height = self.size.height as f32 * 0.5;
-                let height = (width * graph_height / graph_width).min(120.0); // légèrement réduit pour le padding
-                
-                let padding_bottom = 20.0;
+                // 4. Sparklines (Profil simplifié)
             }
 
             spark_fill_count = 0;
@@ -1287,16 +1228,6 @@ impl<'a> State<'a> {
             PolyVertex::new([0.0, y_top_sel, 0.0, 0.0], 0.0), PolyVertex::new([350.0, y_top_sel - 230.0, 0.0, 0.0], 0.0), PolyVertex::new([350.0, y_top_sel, 0.0, 0.0], 0.0),
         ];
         self.queue.write_buffer(&self.selected_bg_buffer, 0, bytemuck::cast_slice(&sel_data));
-
-        // Header Background (adjusted for x1.2 and card-style layout)
-        let rpw = (size.width as f32) - 352.0;
-        let header_w = rpw * 0.5;
-        let mut header_bg_data = vec![
-            PolyVertex::new([355.0, size.height as f32 - 180.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0 + header_w, size.height as f32 - 180.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0, size.height as f32 - 5.0, 0.0, 0.0], 0.0),
-            PolyVertex::new([355.0, size.height as f32 - 5.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0 + header_w, size.height as f32 - 180.0, 0.0, 0.0], 0.0), PolyVertex::new([355.0 + header_w, size.height as f32 - 5.0, 0.0, 0.0], 0.0),
-        ];
-
-        self.queue.write_buffer(&self.header_bg_buffer, 0, bytemuck::cast_slice(&header_bg_data));
 
         // Mise à jour du texte du header (format identique aux cartes de la sidebar)
         let mut header_text_vertices = Vec::new();
@@ -1721,8 +1652,8 @@ impl<'a> State<'a> {
             };
             
             self.pos_scale = anim.start_scale + (anim.target_scale - anim.start_scale) * eased_t;
-            self.camera_offset[0] = (anim.start_center[0] + (anim.target_center[0] - anim.start_center[0]) * (eased_t as f32));
-            self.camera_offset[1] = (anim.start_center[1] + (anim.target_center[1] - anim.start_center[1]) * (eased_t as f32));
+            self.camera_offset[0] = anim.start_center[0] + (anim.target_center[0] - anim.start_center[0]) * (eased_t as f32);
+            self.camera_offset[1] = anim.start_center[1] + (anim.target_center[1] - anim.start_center[1]) * (eased_t as f32);
             if t_raw >= 1.0 {
                 self.global_zoom_animation = None;
                 if self.global_view_state == GlobalViewState::ZoomingOut {
@@ -1819,7 +1750,7 @@ impl<'a> State<'a> {
             self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
             let mut bg_vertices = Vec::new();
-            let mut add_rect = |x0: f32, y0: f32, x1: f32, y1: f32, list: &mut Vec<PolyVertex>| {
+            let add_rect = |x0: f32, y0: f32, x1: f32, y1: f32, list: &mut Vec<PolyVertex>| {
                 list.push(PolyVertex::new([x0, y0, 0.0, 0.0], 0.0));
                 list.push(PolyVertex::new([x1, y0, 0.0, 0.0], 0.0));
                 list.push(PolyVertex::new([x0, y1, 0.0, 0.0], 0.0));
@@ -2032,7 +1963,7 @@ impl<'a> State<'a> {
         let model_view = screen_offset * scale_mat * rotation * center_offset;
         
         // Use Right-Handed orthographic projection
-        let mut ortho = glam::Mat4::orthographic_rh(0.0, self.size.width as f32, 0.0, self.size.height as f32, -20000.0, 20000.0);
+        let ortho = glam::Mat4::orthographic_rh(0.0, self.size.width as f32, 0.0, self.size.height as f32, -20000.0, 20000.0);
         // Adaptation for WGPU Z range [0, 1] instead of [-1, 1]
         let mut wgpu_fix = glam::Mat4::IDENTITY;
         wgpu_fix.z_axis.z = 0.5;
@@ -2535,7 +2466,6 @@ impl<'a> State<'a> {
             pass.set_scissor_rect(352, 0, self.size.width - 352, self.size.height);
             if self.current_morph < 0.5 {
                 pass.set_pipeline(&self.reticule_render_pipeline);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..)); // Use main vertex buffer for reticule pos
                 pass.draw(0..6, 0..1);
             }
 

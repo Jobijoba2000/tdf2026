@@ -2,27 +2,27 @@ struct Uniforms {
     view_proj: mat4x4<f32>,            // 0-64
     light_space_matrix: mat4x4<f32>,   // 64-128
     translate: vec2<f32>,              // 128-136
-    scale: f32,                // 72-76
-    thickness: f32,            // 76-80
-    resolution: vec2<f32>,     // 80-88
-    y_stretch: f32,            // 88-92
-    morph: f32,                // 92-96
-    color: vec4<f32>,          // 96-112
-    mouse_pos: vec2<f32>,      // 112-120
-    raw_mouse_x: f32,          // 120-124
-    max_dist: f32,             // 124-128
-    y_min: f32,                // 128-132
-    y_max: f32,                // 132-136
-    rel_scale: f32,            // 136-140
-    camera_tilt: f32,          // 140-144
-    camera_heading: f32,       // 144-148
-    global_center_x: f32,      // 148-152
-    global_center_y: f32,      // 152-156
-    slope_x1: f32,             // 156-160
-    slope_x2: f32,             // 160-164
-    slope_y1: f32,             // 164-168
-    slope_y2: f32,             // 168-172
-    _pad2: f32,                // 172-176
+    scale: f32,                // 136-140
+    thickness: f32,            // 140-144
+    resolution: vec2<f32>,     // 144-152
+    y_stretch: f32,            // 152-156
+    morph: f32,                // 156-160
+    color: vec4<f32>,          // 160-176
+    mouse_pos: vec2<f32>,      // 176-184
+    raw_mouse_x: f32,          // 184-188
+    max_dist: f32,             // 188-192
+    y_min: f32,                // 192-196
+    y_max: f32,                // 196-200
+    rel_scale: f32,            // 200-204
+    camera_tilt: f32,          // 204-208
+    camera_heading: f32,       // 208-212
+    global_center_x: f32,      // 212-216
+    global_center_y: f32,      // 216-220
+    slope_x1: f32,             // 220-224
+    slope_x2: f32,             // 224-228
+    slope_y1: f32,             // 228-232
+    slope_y2: f32,             // 232-236
+    _pad2: f32,                // 236-240
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -394,42 +394,6 @@ fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(final_color, max(bold_a, outline));
 }
 
-@fragment
-fn fs_text_bold(in: TextVertexOutput) -> @location(0) vec4<f32> {
-    let a_center = textureSample(t_color, t_sampler, in.uv).a;
-    
-    // Contour noir par échantillonnage des voisins
-    let size = vec2<f32>(textureDimensions(t_color, 0));
-    let offset = 1.5 / size;
-    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
-    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
-    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, offset.y)).a;
-    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, offset.y)).a;
-    let outline = max(max(a1, a2), max(a3, a4));
-
-    if (outline < 0.01 && a_center < 0.01) { discard; }
-    
-    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_center);
-    return vec4<f32>(final_color, max(a_center, outline * 0.8));
-}
-
-@fragment
-fn fs_text_std(in: TextVertexOutput) -> @location(0) vec4<f32> {
-    let a_center = textureSample(t_color, t_sampler, in.uv).a;
-    
-    let size = vec2<f32>(textureDimensions(t_color, 0));
-    let offset = 1.2 / size;
-    let a1 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(offset.x, 0.0)).a;
-    let a2 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(offset.x, 0.0)).a;
-    let a3 = textureSample(t_color, t_sampler, in.uv + vec2<f32>(0.0, offset.y)).a;
-    let a4 = textureSample(t_color, t_sampler, in.uv - vec2<f32>(0.0, offset.y)).a;
-    let outline = max(max(a1, a2), max(a3, a4));
-
-    if (outline < 0.01 && a_center < 0.01) { discard; }
-    
-    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), a_center);
-    return vec4<f32>(final_color, max(a_center, outline * 0.7));
-}
 
 struct ReticuleOutput {
     @builtin(position) position: vec4<f32>,
@@ -473,27 +437,6 @@ fn fs_reticule(in: ReticuleOutput) -> @location(0) vec4<f32> {
     discard;
 }
 
-@vertex
-fn vs_dot(in: TextVertexInput) -> TextVertexOutput {
-    var out: TextVertexOutput;
-    let stretched_p = vec2<f32>(in.anchor.x, in.anchor.y * uniforms.y_stretch);
-    let proj = stretched_p * uniforms.scale + uniforms.translate;
-    let final_pos = proj + in.pos * 6.0;
-    out.position = vec4<f32>(
-        (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
-        (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
-        0.0, 1.0
-    );
-    out.uv = in.pos;
-    return out;
-}
-
-@fragment
-fn fs_dot(in: TextVertexOutput) -> @location(0) vec4<f32> {
-    let dist = length(in.uv);
-    if (dist > 1.0) { discard; }
-    return vec4<f32>(1.0, 1.0, 1.0, smoothstep(1.0, 0.8, dist));
-}
 
 struct GlobalVertexInput {
     @location(0) pos: vec2<f32>,
