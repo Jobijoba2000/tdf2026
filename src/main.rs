@@ -391,12 +391,20 @@ impl<'a> State<'a> {
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(surface_caps.formats[0]);
         
+        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+            wgpu::PresentMode::Mailbox
+        } else if surface_caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+            wgpu::PresentMode::Fifo
+        } else {
+            surface_caps.present_modes[0]
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 1,
@@ -2511,8 +2519,9 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let window = Arc::new(WindowBuilder::new()
         .with_title("Cycling Visualizer")
+        .with_maximized(true)
         .build(&event_loop).unwrap());
-    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+    window.set_cursor_visible(true);
 
     let data_dir = find_data_dir();
     let available_races = discover_races(&data_dir);
@@ -2541,6 +2550,14 @@ fn main() {
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: key, state: ElementState::Pressed, .. }, .. } => {
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
+                    Key::Named(NamedKey::F11) => {
+                        let is_fullscreen = state.window.fullscreen().is_some();
+                        if is_fullscreen {
+                            state.window.set_fullscreen(None);
+                        } else {
+                            state.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                        }
+                    }
                     Key::Character(ref s) if s.eq_ignore_ascii_case("m") => {
                         state.app_phase = match state.app_phase {
                             AppPhase::Menu => AppPhase::Racing,
