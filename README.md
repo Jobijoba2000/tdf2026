@@ -1,4 +1,4 @@
-# 🚴‍♂️ Tour de France 2026 — Visualiseur de Profils 2D/3D Interactif
+# 🚴‍♂️ Cycling Visualizer — Visualiseur de Profils 2D/3D Interactif
 
 Une application de bureau ultra-performante développée en **Rust**, permettant de visualiser de manière interactive les étapes du **Tour de France 2026** ainsi que d'autres courses majeures (**Giro d'Italia 2026** et **Vuelta a España 2026**). Propulsée par **wgpu** (WebGPU pour Rust) et **glam**, elle offre un rendu graphique 3D en temps réel à 60 FPS avec des transitions animées fluides (morphing) et une interface utilisateur haut de gamme.
 
@@ -8,7 +8,7 @@ https://github.com/user-attachments/assets/6d848c80-9903-4a48-ad48-35eae3c320f3
 
 ## 🌟 Fonctionnalités Principales
 
-* **Visualisation Multi-Courses** : Naviguez et changez instantanément de course entre le Tour de France, le Giro d'Italia et la Vuelta a España via un menu d'accueil dynamique ou en cliquant directement sur le titre de la course en haut à gauche.
+* **Visualisation Multi-Courses** : Naviguez et changez instantanément de course entre le Tour de France, le Giro d'Italia et la Vuelta a España via un menu d'accueil dynamique (touche **M**).
 * **Profils 2D Détaillés** : Affichage précis de la courbe d'altitude de chaque étape en fonction de sa distance.
 * **Calculateur de Pente Interactif** : Maintenez la touche **Ctrl** et faites un **clic gauche** sur le profil pour définir un point de départ, puis un second Ctrl+clic pour le point d'arrivée : l'application trace instantanément une zone rouge de sélection et calcule le pourcentage moyen de la pente, la distance et le dénivelé. Pour annuler ou quitter ce mode à tout moment, effectuez un simple **clic droit** sur le profil.
 * **Morphing 2D ➡️ 3D** : Transition animée fluide passant d'une courbe de profil 2D à un tracé 3D extrudé et surélevé dans l'espace.
@@ -50,7 +50,7 @@ cargo build --release
 
 Une fois la compilation terminée, vous obtiendrez le fichier exécutable à cet emplacement :
 ```text
-target/release/tdf2026.exe
+target/release/cycling-visualizer.exe
 ```
 
 **Note importante :** Ce fichier `.exe` est **100% autonome**. Vous pouvez le copier, le renommer, et l'envoyer sur n'importe quel ordinateur Windows sans avoir besoin de copier le dossier `data/` ou tout autre fichier externe. L'application démarrera instantanément avec toutes ses ressources intégrées !
@@ -91,9 +91,7 @@ cargo run --release
 ### Navigation & Sélection
 * **Sélectionner une étape** : Cliquez sur une carte d'étape dans la colonne de gauche, ou cliquez directement sur le tracé rouge d'une étape sur la carte globale.
 * **Défiler la liste des étapes** : Utilisez la **molette de la souris** au-dessus de la colonne latérale de gauche.
-* **Menu Principal / Changer de Course** : 
-  * Appuyez sur la touche **M**.
-  * Ou faites un **clic gauche** sur le nom de la course affiché en haut à gauche (au-dessus du numéro de l'étape).
+* **Menu Principal / Changer de Course** : Appuyez sur la touche **M**.
 
 ### Graphique Principal (Detailed View)
 * **Clic gauche + Glisser** :

@@ -23,11 +23,11 @@ if (!(Test-Path $export_path)) {
 }
 
 Write-Host "3. Copie de l'exécutable..." -ForegroundColor Cyan
-$exe_src = "target/release/tdf2026.exe"
+$exe_src = "target/release/cycling-visualizer.exe"
 if (Test-Path $exe_src) {
     Copy-Item -Path $exe_src -Destination $export_path -Force
 } else {
-    Write-Error "L'exécutable tdf2026.exe n'a pas été trouvé dans target/release/."
+    Write-Error "L'exécutable cycling-visualizer.exe n'a pas été trouvé dans target/release/."
     exit 1
 }
 
