@@ -7,17 +7,15 @@ https://github.com/user-attachments/assets/6d848c80-9903-4a48-ad48-35eae3c320f3
 
 ---
 
-## 🌟 Fonctionnalités Principales
+## 🌟 Vues et Transitions
 
-* **Visualisation Multi-Courses** : Changement instantané de course entre le Tour de France, le Giro d'Italia et la Vuelta a España via un menu d'accueil (touche **M**).
-* **Profils 2D Détaillés** : Courbe d'altitude de chaque étape en fonction de sa distance.
-* **Calculateur de Pente Interactif** : En maintenant la touche **Ctrl**, faites un **clic gauche** sur le profil pour définir le point de départ et le point d'arrivée. L'application calcule le pourcentage moyen, la distance et le dénivelé. Faites un **clic droit** pour réinitialiser la sélection.
-* **Morphing 2D ➡️ 3D** : Transition animée entre le profil 2D et le tracé 3D géolocalisé.
-* **Caméra 3D** : Rotation, inclinaison et zoom libres avec gestion de l'inertie.
-* **Carte Globale** : Affichage de la carte du pays et du tracé géographique de toutes les étapes de la course.
-* **Couleurs Personnalisées** : Basculement entre les couleurs officielles de chaque course (Jaune TDF, Rose Giro, Rouge Vuelta) et une version néon à fort contraste.
-* **Barre Latérale** : Liste des étapes avec date, distance et aperçu miniature (sparkline).
-* **Support Multilingue & Rendu du Texte** : Gestion des caractères accentués (comme le "ñ" de España) et lissage avec effet de contour noir pour la lisibilité.
+L'application s'articule autour de 4 vues principales :
+
+1. **Menu Principal** (touche **M**) : Sélection de la course active (Tour de France, Giro, Vuelta).
+2. **Vue 2D (Profil d'étape)** : Courbe d'altitude en fonction de la distance de l'étape. Permet de calculer des pourcentages de pentes (Ctrl + Clic gauche pour définir début/fin, Clic droit pour réinitialiser).
+3. **Vue 3D (Tracé d'étape)** (touche **Espace** depuis la 2D) : Modèle 3D extrudé et orientable de l'étape. Le passage entre la 2D et la 3D s'effectue via une transition animée par morphing.
+4. **Vue Globale (Carte)** (touche **Entrée** depuis l'étape) : Affiche la carte complète du pays de la course avec les tracés de toutes les étapes. Appuyez sur **Espace** pour en sortir et revenir au profil de l'étape.
+
 
 
 ---
@@ -110,22 +108,15 @@ cargo run --release
 
 ## 🎮 Contrôles et Raccourcis
 
-### Navigation & Sélection
-* **Sélectionner une étape** : Cliquez sur une carte d'étape dans la colonne de gauche, ou cliquez directement sur le tracé rouge d'une étape sur la carte globale.
-* **Défiler la liste des étapes** : Utilisez la **molette de la souris** au-dessus de la colonne latérale de gauche.
-* **Menu Principal / Changer de Course** : Appuyez sur la touche **M**.
+### Raccourcis Clavier
+* **M** : Retourner au menu principal (sélection de la course).
+* **Espace** : Basculer entre la vue 2D et la vue 3D (ou quitter la vue globale).
+* **Entrée** : Entrer dans la vue globale (carte du pays).
+* **C** : Alterner entre les couleurs officielles de la course et la couleur vert néon.
 
-### Graphique Principal (Detailed View)
-* **Clic gauche + Glisser** :
-  * En mode **2D** : Déplacez latéralement (panoramique) le profil.
-  * En mode **3D** / **Global** : Faites tourner la caméra dans l'espace autour du profil ou de la carte géographique.
-* **Molette de la souris** : Zoom avant / arrière au niveau du pointeur de la souris (avec un alignement vertical stable du profil 2D).
-* **Ctrl + Clic gauche sur le profil 2D** :
-  * Premier clic : Définit le point de départ de la mesure de pente (une ligne verticale blanche limitée au profil s'affiche).
-  * Deuxième clic : Définit le point d'arrivée. Affiche une zone de sélection rouge vif, deux délimiteurs verticaux blancs arrêtés pile au profil, et le résultat calculé de la pente sous forme de texte double-ligne centré (pourcentage en haut, dénivelé et distance en bas).
-* **Clic droit sur le profil 2D** : Sort instantanément du mode de calcul de pente (réinitialise l'état, effaçant le tracé rouge, les lignes et les textes).
+### Souris
+* **Sélection d'étape** : Clic gauche sur une étape dans la colonne de gauche ou sur le tracé rouge de la carte globale.
+* **Scroll** : Molette sur la colonne de gauche pour défiler les étapes, ou sur le graphique pour zoomer.
+* **Pan / Rotation** : Clic gauche maintenu et glisser.
+* **Calcul de pente** : Maintenir **Ctrl** + **Clic gauche** pour placer les points de départ et de fin sur le profil 2D. **Clic droit** pour annuler.
 
-### Interface & Boutons
-* **Changer de Couleur (Theme)** : Appuyez sur la touche **C** pour alterner à tout moment entre les couleurs officielles de la course (Jaune, Rose, Rouge) et le Vert Néon à fort contraste.
-* **Bouton "3D"** (ou touche **Espace**) : Déclenche la transition morphing fluide entre le profil 2D et le modèle 3D extrudé de l'étape.
-* **Bouton "Global"** (ou touche **Entrée**) : Active ou désactive la vue d'ensemble de la carte géographique.
