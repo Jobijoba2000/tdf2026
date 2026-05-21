@@ -24,7 +24,7 @@ pub struct FontAtlas {
     pub rgba_data: Vec<u8>,
 }
 
-const CHARACTERS: &str = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àâéèêëîïôûùçÀÂÉÈÊËÎÏÔÛÙÇñÑíÍáÁóÓúÚ-.,\\'()?!:;/@#$%^&*=_+[]{}<>|";
+const CHARACTERS: &str = " abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789àâéèêëîïôûùçÀÂÉÈÊËÎÏÔÛÙÇñÑíÍáÁóÓúÚ-.,\\'()?!:;/@#$%^&*=_+[]{}<>|•●";
 
 impl FontAtlas {
     pub fn from_bytes(font_data: &[u8]) -> Option<Self> {

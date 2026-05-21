@@ -22,7 +22,7 @@ struct Uniforms {
     slope_x2: f32,             // 224-228
     slope_y1: f32,             // 228-232
     slope_y2: f32,             // 232-236
-    _pad2: f32,                // 236-240
+    capped_rel_scale: f32,     // 236-240
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -208,8 +208,10 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     // Jaune équilibré (ou rouge si flag > 0.5)
     var base_color = uniforms.color.rgb * 0.75;
+    var is_red: f32 = 0.0;
     if (in.uv.y > 0.5) {
-        base_color = vec3<f32>(0.9, 0.12, 0.12);
+        base_color = vec3<f32>(0.98, 0.05, 0.05); // Un rouge très vif, pur et lumineux
+        is_red = 1.0;
     }
     
     // 1. NORMALE PIVOTÉE
@@ -252,7 +254,11 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     // On combine l'éclairage (Key 40% + Fill 20%)
     let lighting = (ambient + diff1 * 0.4 + diff2 * 0.2) * border_glow * depth_grad;
     
-    let final_lighting = mix(0.85, lighting, in.morph);
+    var final_lighting = mix(0.85, lighting, in.morph);
+    if (is_red > 0.5) {
+        // Boost de luminosité pour le rouge sélectionné afin d'éviter qu'il soit terne en 3D
+        final_lighting = mix(final_lighting, 1.0, 0.35);
+    }
     
     // Éclat additif très léger (blancs)
     let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
@@ -282,7 +288,11 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     let shadow_mult = mix(0.72, 1.0, shadow_factor);
-    let self_shadow_attenuation = mix(1.0, shadow_mult, in.morph);
+    var self_shadow_attenuation = mix(1.0, shadow_mult, in.morph);
+    if (is_red > 0.5) {
+        // Atténue la noirceur des ombres sur la zone rouge sélectionnée
+        self_shadow_attenuation = mix(self_shadow_attenuation, 1.0, 0.40);
+    }
     final_color = final_color * self_shadow_attenuation;
     
     return vec4<f32>(final_color, 1.0);
@@ -314,6 +324,7 @@ struct TextVertexInput {
     @location(1) uv: vec2<f32>,
     @location(2) anchor: vec2<f32>,
     @location(3) size: f32,
+    @location(4) depth: f32,
 };
 
 struct TextVertexOutput {
@@ -324,18 +335,15 @@ struct TextVertexOutput {
 @vertex
 fn vs_text(in: TextVertexInput) -> TextVertexOutput {
     var out: TextVertexOutput;
-    let initial_scale = (uniforms.resolution.x - 500.0) / uniforms.max_dist;
-    let rel_scale = uniforms.scale / initial_scale;
-    let capped_scale = initial_scale * min(rel_scale, 10.0);
     let anchor_proj = vec2<f32>(
-        in.anchor.x * capped_scale + uniforms.translate.x,
+        in.anchor.x * uniforms.scale + uniforms.translate.x,
         in.anchor.y * uniforms.y_stretch * uniforms.scale + uniforms.translate.y
     );
     let final_pos = anchor_proj + vec2<f32>(in.pos.x, -in.pos.y) * (in.size * uniforms.rel_scale);
     out.position = vec4<f32>(
         (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
         (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
-        0.0, 1.0
+        in.depth, 1.0
     );
     out.uv = in.uv;
     return out;
@@ -344,11 +352,17 @@ fn vs_text(in: TextVertexInput) -> TextVertexOutput {
 @vertex
 fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
     var out: TextVertexOutput;
-    let final_pos = in.anchor + vec2<f32>(in.pos.x, -in.pos.y) * in.size * uniforms.rel_scale;
+    var s = in.size;
+    var scale_factor = uniforms.rel_scale;
+    if (s < 0.0) {
+        s = -s;
+        scale_factor = uniforms.capped_rel_scale;
+    }
+    let final_pos = in.anchor + vec2<f32>(in.pos.x, -in.pos.y) * s * scale_factor;
     out.position = vec4<f32>(
         (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
         (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
-        0.0, 1.0
+        in.depth, 1.0
     );
     out.uv = in.uv;
     return out;
@@ -361,7 +375,7 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
     out.position = vec4<f32>(
         (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
         (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
-        0.0, 1.0
+        in.depth, 1.0
     );
     out.uv = in.uv;
     return out;
