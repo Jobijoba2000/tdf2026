@@ -23,6 +23,10 @@ struct Uniforms {
     slope_y1: f32,             // 228-232
     slope_y2: f32,             // 232-236
     capped_rel_scale: f32,     // 236-240
+    circle_thickness: f32,     // 240-244
+    pad1: f32,                 // 244-248
+    pad2: f32,                 // 248-252
+    pad3: f32,                 // 252-256
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -330,6 +334,7 @@ struct TextVertexInput {
 struct TextVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) is_circle: f32,
 };
 
 @vertex
@@ -346,6 +351,7 @@ fn vs_text(in: TextVertexInput) -> TextVertexOutput {
         in.depth, 1.0
     );
     out.uv = in.uv;
+    out.is_circle = 0.0;
     return out;
 }
 
@@ -354,6 +360,19 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
     var out: TextVertexOutput;
     var s = in.size;
     var scale_factor = uniforms.rel_scale;
+    if (s < -900.0) {
+        // Selection circle! Decoupled from zoom, follows stroke thickness.
+        let s_circle = uniforms.circle_thickness;
+        let final_pos = in.anchor + in.pos * s_circle;
+        out.position = vec4<f32>(
+            (final_pos.x / uniforms.resolution.x) * 2.0 - 1.0,
+            (final_pos.y / uniforms.resolution.y) * 2.0 - 1.0,
+            in.depth, 1.0
+        );
+        out.uv = in.uv;
+        out.is_circle = 1.0;
+        return out;
+    }
     if (s < 0.0) {
         s = -s;
         scale_factor = uniforms.capped_rel_scale;
@@ -365,6 +384,7 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
         in.depth, 1.0
     );
     out.uv = in.uv;
+    out.is_circle = 0.0;
     return out;
 }
 
@@ -378,6 +398,7 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
         in.depth, 1.0
     );
     out.uv = in.uv;
+    out.is_circle = 0.0;
     return out;
 }
 
@@ -386,6 +407,27 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
 
 @fragment
 fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
+    if (in.is_circle > 0.5) {
+        let dist = length(in.uv);
+        if (dist > 1.0) {
+            discard;
+        }
+        
+        let pixel_width = 1.0 / uniforms.circle_thickness;
+        let alpha = 1.0 - smoothstep(1.0 - pixel_width, 1.0, dist);
+        if (alpha <= 0.0) {
+            discard;
+        }
+        
+        let border_pixels = 2.0;
+        let border_uv = border_pixels * pixel_width;
+        let inner_edge = 1.0 - border_uv;
+        let border_factor = smoothstep(inner_edge - pixel_width, inner_edge, dist);
+        
+        let color = mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.0, 0.0, 0.0), border_factor);
+        return vec4<f32>(color, alpha);
+    }
+
     let a_center = textureSample(t_color, t_sampler, in.uv).a;
     let size = vec2<f32>(textureDimensions(t_color, 0));
     let offset = 3.5 / size; 

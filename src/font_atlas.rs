@@ -11,6 +11,7 @@ const PADDING: u32 = 3;
 pub struct GlyphMetrics {
     pub advance: f32,   // largeur d'avancement (en px à FONT_SIZE)
     pub width: u32,     // largeur du quad (avec padding)
+    pub height: f32,    // hauteur réelle du glyphe
     pub ox: f32,        // offset x (xmin)
     pub u0: f32, pub v0: f32,
     pub u1: f32, pub v1: f32,
@@ -96,6 +97,7 @@ impl FontAtlas {
             metrics_map.insert(c, GlyphMetrics {
                 advance: char_advances.get(&c).cloned().unwrap_or(0.0),
                 width: w,
+                height: gm.height as f32,
                 ox: gm.bounds.xmin,
                 u0, v0, u1, v1,
             });

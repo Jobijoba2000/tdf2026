@@ -146,7 +146,11 @@ struct Uniforms {
     slope_x2: f32,                     // 224-228
     slope_y1: f32,                     // 228-232
     slope_y2: f32,                     // 232-236
-    capped_rel_scale: f32,             // 236-240 (align to 16 bytes)
+    capped_rel_scale: f32,             // 236-240
+    circle_thickness: f32,             // 240-244
+    pad1: f32,                         // 244-248
+    pad2: f32,                         // 248-252
+    pad3: f32,                         // 252-256 (align to 16 bytes)
 }
 
 struct ZoomAnimation {
@@ -1792,6 +1796,10 @@ impl<'a> State<'a> {
                 slope_y1: -1000.0,
                 slope_y2: -1000.0,
                 capped_rel_scale: 1.0,
+                circle_thickness: 1.0,
+                pad1: 0.0,
+                pad2: 0.0,
+                pad3: 0.0,
             };
             self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -1992,6 +2000,13 @@ impl<'a> State<'a> {
         // No limit on height translation for the graph
 
         let dyn_thickness = (1.8 * (self.pos_scale / self.initial_scale).powf(0.20)) as f32;
+        let is_global = self.global_view_state != GlobalViewState::Inactive;
+        let circle_thickness_base = if is_global {
+            dyn_thickness * 1.8
+        } else {
+            dyn_thickness
+        };
+        let s_circle = 8.0 * circle_thickness_base;
         let rel_scale = (self.pos_scale / self.initial_scale) as f32;
         let capped_rel_scale = rel_scale.min(10.0);
         
@@ -2100,6 +2115,10 @@ impl<'a> State<'a> {
             slope_y1,
             slope_y2,
             capped_rel_scale,
+            circle_thickness: s_circle,
+            pad1: 0.0,
+            pad2: 0.0,
+            pad3: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -2277,22 +2296,28 @@ impl<'a> State<'a> {
 
             let mut slope_text_vertices = Vec::new();
 
-            // Helper to push a circle character glyph centered on [cx, cy]
-            let push_circle = |cx: f32, cy: f32, cz: f32, size: f32, vertices: &mut Vec<TextVertex>| {
-                let circle_char = '•';
-                if let Some(m) = font.metrics.get(&circle_char).or_else(|| font.metrics.get(&'●')).or_else(|| font.metrics.get(&'.')) {
-                    let (pos, uvs) = font.get_text_geometry(&circle_char.to_string());
-                    let offset_x = - (m.width as f32 * 0.5) * size * rel_scale;
-                    let anchor = [cx + offset_x, cy];
-                    for i in 0..(pos.len() / 2) {
-                        vertices.push(TextVertex {
-                            pos: [pos[i*2], pos[i*2+1]],
-                            uv: [uvs[i*2], uvs[i*2+1]],
-                            anchor,
-                            size,
-                            depth: cz,
-                        });
-                    }
+            // Helper to push a circle unit quad centered on [cx, cy]
+            let push_circle = |cx: f32, cy: f32, cz: f32, vertices: &mut Vec<TextVertex>| {
+                let anchor = [cx, cy];
+                // Quad vertices: pos in [-1, 1], uv in [-1, 1]
+                let quad = [
+                    // Triangle 1
+                    ([-1.0, -1.0], [-1.0, -1.0]),
+                    ([ 1.0, -1.0], [ 1.0, -1.0]),
+                    ([-1.0,  1.0], [-1.0,  1.0]),
+                    // Triangle 2
+                    ([-1.0,  1.0], [-1.0,  1.0]),
+                    ([ 1.0, -1.0], [ 1.0, -1.0]),
+                    ([ 1.0,  1.0], [ 1.0,  1.0]),
+                ];
+                for (p, uv) in quad {
+                    vertices.push(TextVertex {
+                        pos: p,
+                        uv,
+                        anchor,
+                        size: -999.0, // Special flag for circle
+                        depth: cz,
+                    });
                 }
             };
 
@@ -2302,14 +2327,14 @@ impl<'a> State<'a> {
                 let start_x = start[0];
                 let (start_y, start_lx, start_ly) = get_profile_point_3d(start_x, active_stage);
                 let pos = get_screen_pos_at_distance(start_x, start_y, start_lx, start_ly);
-                push_circle(pos[0], pos[1], pos[2], 0.35, &mut slope_text_vertices);
+                push_circle(pos[0], pos[1], pos[2], &mut slope_text_vertices);
             }
 
             if let Some(end) = self.slope_end {
                 let end_x = end[0];
                 let (end_y, end_lx, end_ly) = get_profile_point_3d(end_x, active_stage);
                 let pos = get_screen_pos_at_distance(end_x, end_y, end_lx, end_ly);
-                push_circle(pos[0], pos[1], pos[2], 0.35, &mut slope_text_vertices);
+                push_circle(pos[0], pos[1], pos[2], &mut slope_text_vertices);
             }
 
             let gap = 15.0; let s = 0.4; let row_h = font.font_size * 1.4;
