@@ -209,7 +209,7 @@ fn fs_selected_bg(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(uniforms.color.rgb * 0.2, 0.8);
 }
 @fragment
-fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_poly(in: VertexOutput, @builtin(front_facing) is_front_facing: bool) -> @location(0) vec4<f32> {
     // Jaune équilibré (ou rouge si flag > 0.5)
     var base_color = uniforms.color.rgb * 0.75;
     var is_red: f32 = 0.0;
@@ -218,85 +218,176 @@ fn fs_poly(in: VertexOutput) -> @location(0) vec4<f32> {
         is_red = 1.0;
     }
     
-    // 1. NORMALE PIVOTÉE
-    let raw_normal = normalize(in.normal);
-    let h = uniforms.camera_heading;
-    let cos_h = cos(h);
-    let sin_h = sin(h);
-    let rotated_normal = vec3<f32>(
-        raw_normal.x * cos_h - raw_normal.y * sin_h,
-        raw_normal.x * sin_h + raw_normal.y * cos_h,
-        0.0
-    );
+    var final_color = vec3<f32>(0.0);
     
-    // 2. ÉCLAIRAGE MULTI-SOURCES (Équilibré pour le contraste)
-    let light_dir1 = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
-    let diff1 = max(dot(rotated_normal, light_dir1), 0.0);
-    let light_dir2 = normalize(vec3<f32>(0.8, -0.4, 0.3));
-    let diff2 = max(dot(rotated_normal, light_dir2), 0.0);
-    
-    // Ambient réduit pour donner plus de relief
-    let ambient = 0.35;
-    
-    // 3. EFFETS PREMIUM (Subtils)
-    let view_dir = normalize(vec3<f32>(0.0, 0.0, 1.0));
-    
-    // Spéculaire très fin
-    let half_dir = normalize(light_dir1 + view_dir);
-    let spec = pow(max(dot(rotated_normal, half_dir), 0.0), 64.0);
-    
-    // Fresnel très discret pour le contour
-    let fresnel = pow(1.0 - max(dot(rotated_normal, view_dir), 0.0), 5.0);
-    
-    // Gradient vertical doux
-    let height_factor = smoothstep(0.0, 600.0, in.world_pos.z);
-    let depth_grad = mix(0.9, 1.1, height_factor);
-    
-    // 4. COMBINAISON
-    let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
-    
-    // On combine l'éclairage (Key 40% + Fill 20%)
-    let lighting = (ambient + diff1 * 0.4 + diff2 * 0.2) * border_glow * depth_grad;
-    
-    var final_lighting = mix(0.85, lighting, in.morph);
-    if (is_red > 0.5) {
-        // Boost de luminosité pour le rouge sélectionné afin d'éviter qu'il soit terne en 3D
-        final_lighting = mix(final_lighting, 1.0, 0.35);
+    if (uniforms.pad1 > 0.5) {
+        // --- VERSION METALLIQUE ---
+        var base_color_met = uniforms.color.rgb * 0.95;
+        if (in.uv.y > 0.5) {
+            base_color_met = vec3<f32>(0.98, 0.15, 0.15);
+        }
+        
+        let raw_normal = normalize(in.normal);
+        let h = uniforms.camera_heading;
+        let cos_h = cos(h);
+        let sin_h = sin(h);
+        let normal_h = vec3<f32>(
+            raw_normal.x * cos_h - raw_normal.y * sin_h,
+            raw_normal.x * sin_h + raw_normal.y * cos_h,
+            0.0
+        );
+        
+        let tilt = uniforms.camera_tilt;
+        let cos_t = cos(tilt);
+        let sin_t = sin(tilt);
+        var rotated_normal = normalize(vec3<f32>(
+            normal_h.x,
+            normal_h.y * cos_t,
+            -normal_h.y * sin_t
+        ));
+        
+        if (!is_front_facing) {
+            rotated_normal = -rotated_normal;
+        }
+        
+        let light_dir1 = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
+        let light_dir2 = normalize(vec3<f32>(0.8, -0.4, 0.3));
+        let view_dir = vec3<f32>(0.0, 0.0, 1.0);
+        
+        let diff1 = max(dot(rotated_normal, light_dir1), 0.0);
+        let diff2 = max(dot(rotated_normal, light_dir2), 0.0);
+        
+        let env_reflection_intensity = 1.0;
+        let metallic = 0.82;
+        let diffuse_color = base_color_met * (1.0 - metallic);
+        let specular_color = mix(vec3<f32>(0.04), base_color_met, metallic);
+        
+        let diffuse_lighting = (0.40 + diff1 * 0.45 + diff2 * 0.15);
+        let diffuse_final = diffuse_color * diffuse_lighting;
+        
+        // Solution 4 : Métal brossé / Rugosité (bruit sur les normales)
+        let noise_val = sin(in.world_pos.x * 3.0) * cos(in.world_pos.y * 3.0) * sin(in.world_pos.z * 5.0);
+        let noise_amp = 0.08;
+        let perturbed_normal = normalize(rotated_normal + vec3<f32>(noise_val * noise_amp, noise_val * noise_amp, noise_val * noise_amp * 0.3));
+        
+        let R = reflect(-view_dir, perturbed_normal);
+        let sky_color = vec3<f32>(0.5, 0.7, 1.0) * 0.9;
+        let ground_color = vec3<f32>(0.12, 0.12, 0.15);
+        let env_gradient = mix(ground_color, sky_color, R.y * 0.5 + 0.5);
+        
+        let stripe_v1 = smoothstep(0.75, 0.95, cos(R.x * 5.0));
+        let stripe_v2 = smoothstep(0.85, 0.98, cos(R.x * 11.0 - 2.5));
+        let stripe_h = smoothstep(0.8, 0.95, sin(R.y * 4.0));
+        
+        // Teinte les lumières d'environnement avec la couleur de base (Solution 3)
+        let env_lights = base_color_met * (stripe_v1 * 0.6 + stripe_v2 * 0.4 + stripe_h * 0.2);
+        let env_reflection = env_gradient * base_color_met + env_lights;
+        
+        let half_dir1 = normalize(light_dir1 + view_dir);
+        let spec1 = pow(max(dot(perturbed_normal, half_dir1), 0.0), 40.0);
+        let half_dir2 = normalize(light_dir2 + view_dir);
+        let spec2 = pow(max(dot(perturbed_normal, half_dir2), 0.0), 20.0);
+        
+        let studio_dir = normalize(vec3<f32>(0.3, 0.8, 0.5));
+        let spec_studio = pow(max(dot(R, studio_dir), 0.0), 16.0);
+        
+        let cos_theta = max(dot(perturbed_normal, view_dir), 0.0);
+        let fresnel = specular_color + (vec3<f32>(1.0) - specular_color) * pow(1.0 - cos_theta, 5.0);
+        
+        // Teinte les spéculaires avec la couleur de base (Solution 3)
+        let spec_lights = base_color_met * (spec1 * 0.55 + spec2 * 0.25 + spec_studio * 0.4);
+        let metallic_spec = fresnel * env_reflection + spec_lights + env_lights * 0.2;
+        let basic_spec = fresnel * 0.15;
+        let specular_final = mix(basic_spec, metallic_spec, env_reflection_intensity);
+        
+        let height_factor = smoothstep(0.0, 600.0, in.world_pos.z);
+        let depth_grad = mix(0.9, 1.1, height_factor);
+        
+        let color_3d = (diffuse_final + specular_final) * depth_grad;
+        let color_2d = base_color_met * 0.85;
+        
+        final_color = mix(color_2d, color_3d, in.morph);
+        if (is_red > 0.5) {
+            final_color = final_color * 1.2 + spec1 * 0.2 * base_color_met;
+        }
+    } else {
+        // --- VERSION STANDARD NON-METALLIQUE (D'ORIGINE) ---
+        let raw_normal = normalize(in.normal);
+        let h = uniforms.camera_heading;
+        let cos_h = cos(h);
+        let sin_h = sin(h);
+        var rotated_normal = vec3<f32>(
+            raw_normal.x * cos_h - raw_normal.y * sin_h,
+            raw_normal.x * sin_h + raw_normal.y * cos_h,
+            0.0
+        );
+        
+        if (!is_front_facing) {
+            rotated_normal = -rotated_normal;
+        }
+        
+        let light_dir1 = normalize(vec3<f32>(-0.8, 0.4, 0.5)); 
+        let diff1 = max(dot(rotated_normal, light_dir1), 0.0);
+        let light_dir2 = normalize(vec3<f32>(0.8, -0.4, 0.3));
+        let diff2 = max(dot(rotated_normal, light_dir2), 0.0);
+        
+        let ambient = 0.35;
+        let view_dir = normalize(vec3<f32>(0.0, 0.0, 1.0));
+        
+        let half_dir = normalize(light_dir1 + view_dir);
+        let spec = pow(max(dot(rotated_normal, half_dir), 0.0), 64.0);
+        
+        let fresnel = pow(1.0 - max(dot(rotated_normal, view_dir), 0.0), 5.0);
+        
+        let height_factor = smoothstep(0.0, 600.0, in.world_pos.z);
+        let depth_grad = mix(0.9, 1.1, height_factor);
+        
+        let border_glow = mix(0.8, 1.0, smoothstep(0.0, 0.03, in.uv.x) * smoothstep(1.0, 0.97, in.uv.x));
+        let lighting = (ambient + diff1 * 0.4 + diff2 * 0.2) * border_glow * depth_grad;
+        
+        var final_lighting = mix(0.85, lighting, in.morph);
+        if (is_red > 0.5) {
+            final_lighting = mix(final_lighting, 1.0, 0.35);
+        }
+        
+        let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
+        final_color = base_color * final_lighting + vec3<f32>(shine);
     }
-    
-    // Éclat additif très léger (blancs)
-    let shine = (spec * 0.2 + fresnel * 0.15) * in.morph;
-    var final_color = base_color * final_lighting + vec3<f32>(shine);
     
     // --- OMBRES PORTÉES DU PROFIL SUR LE PROFIL ---
-    let shadow_coords = in.shadow_pos.xyz / in.shadow_pos.w;
-    let uv_shadow = vec2<f32>(
-        shadow_coords.x * 0.5 + 0.5,
-        1.0 - (shadow_coords.y * 0.5 + 0.5)
-    );
-    let depth_shadow = shadow_coords.z;
+    var self_shadow_attenuation: f32 = 1.0;
     
-    var shadow_factor: f32 = 1.0;
-    if (uv_shadow.x >= 0.0 && uv_shadow.x <= 1.0 && uv_shadow.y >= 0.0 && uv_shadow.y <= 1.0 && depth_shadow <= 1.0) {
-        let bias = mix(0.0035, 0.0012, step(0.5, in.uv.y));
-        var shadow_accum: f32 = 0.0;
-        let texel_size: f32 = 1.0 / 2048.0;
+    if (uniforms.pad2 > 0.5) {
+        let shadow_coords = in.shadow_pos.xyz / in.shadow_pos.w;
+        let uv_shadow = vec2<f32>(
+            shadow_coords.x * 0.5 + 0.5,
+            1.0 - (shadow_coords.y * 0.5 + 0.5)
+        );
+        let depth_shadow = shadow_coords.z;
         
-        for (var dy: f32 = -1.0; dy <= 1.0; dy += 1.0) {
-            for (var dx: f32 = -1.0; dx <= 1.0; dx += 1.0) {
-                let offset = vec2<f32>(dx, dy) * texel_size;
-                shadow_accum += textureSampleCompare(t_shadow, sampler_shadow, uv_shadow + offset, depth_shadow - bias);
+        var shadow_factor: f32 = 1.0;
+        if (uv_shadow.x >= 0.0 && uv_shadow.x <= 1.0 && uv_shadow.y >= 0.0 && uv_shadow.y <= 1.0 && depth_shadow <= 1.0) {
+            let bias = mix(0.0035, 0.0012, step(0.5, in.uv.y));
+            var shadow_accum: f32 = 0.0;
+            let texel_size: f32 = 1.0 / 2048.0;
+            
+            for (var dy: f32 = -1.0; dy <= 1.0; dy += 1.0) {
+                for (var dx: f32 = -1.0; dx <= 1.0; dx += 1.0) {
+                    let offset = vec2<f32>(dx, dy) * texel_size;
+                    shadow_accum += textureSampleCompare(t_shadow, sampler_shadow, uv_shadow + offset, depth_shadow - bias);
+                }
             }
+            shadow_factor = shadow_accum / 9.0;
         }
-        shadow_factor = shadow_accum / 9.0;
+        
+        let shadow_mult = mix(0.72, 1.0, shadow_factor);
+        self_shadow_attenuation = mix(1.0, shadow_mult, in.morph);
+        if (is_red > 0.5) {
+            // Atténue la noirceur des ombres sur la zone rouge sélectionnée
+            self_shadow_attenuation = mix(self_shadow_attenuation, 1.0, 0.40);
+        }
     }
     
-    let shadow_mult = mix(0.72, 1.0, shadow_factor);
-    var self_shadow_attenuation = mix(1.0, shadow_mult, in.morph);
-    if (is_red > 0.5) {
-        // Atténue la noirceur des ombres sur la zone rouge sélectionnée
-        self_shadow_attenuation = mix(self_shadow_attenuation, 1.0, 0.40);
-    }
     final_color = final_color * self_shadow_attenuation;
     
     return vec4<f32>(final_color, 1.0);

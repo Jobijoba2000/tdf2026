@@ -16,6 +16,14 @@ L'application s'articule autour de 4 vues principales :
 3. **Vue 3D (Tracé d'étape)** (touche **Espace** depuis la 2D) : Modèle 3D extrudé et orientable de l'étape. Le passage entre la 2D et la 3D s'effectue via une transition animée par morphing.
 4. **Vue Globale (Carte)** (touche **Entrée** depuis l'étape) : Affiche la carte complète du pays de la course avec les tracés de toutes les étapes. Appuyez sur **Espace** pour en sortir et revenir au profil de l'étape.
 
+### 🎨 Styles de Rendu 3D (touche **T**)
+Dans la vue 3D, vous pouvez basculer entre deux styles de rendu :
+* **Style Standard** (par défaut) : Conserve la géométrie brute et segmentée d'origine avec un lissage minimal des normales (fenêtre de 3 points) pour respecter l'esthétique originale.
+* **Style Métallique Brossé Anodisé** : Modèle de réflexion spéculaire sophistiqué simulant de l'aluminium brossé coloré. Il applique un lissage géométrique fluide sur les normales (fenêtre de 61 points) pour éliminer les artefacts de brillance ("code-barres"), et diffuse des reflets satinés teintés avec la couleur de l'étape pour un rendu premium sans flashs blancs éblouissants.
+
+### 👥 Ombres Portées (touche **O**)
+Dans la vue 3D, vous pouvez activer ou désactiver à la volée le rendu des ombres portées sous le profil 3D pour optimiser les performances ou changer l'esthétique.
+
 
 
 ---
@@ -113,6 +121,8 @@ cargo run --release
 * **Espace** : Basculer entre la vue 2D et la vue 3D (ou quitter la vue globale).
 * **Entrée** : Entrer dans la vue globale (carte du pays).
 * **C** : Alterner entre les couleurs officielles de la course et la couleur vert néon.
+* **T** : Basculer entre le style de rendu standard et le style métallique brossé anodisé.
+* **O** : Activer / Désactiver les ombres portées dans la vue 3D.
 
 ### Souris
 * **Sélection d'étape** : Clic gauche sur une étape dans la colonne de gauche ou sur le tracé rouge de la carte globale.

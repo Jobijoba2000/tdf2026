@@ -372,6 +372,8 @@ struct State<'a> {
     app_phase: AppPhase,
     hovered_menu_idx: Option<usize>,
     use_neon_green: bool,
+    use_metallic: bool,
+    show_shadows: bool,
 }
 
 
@@ -922,6 +924,8 @@ impl<'a> State<'a> {
             race_color, race_name, available_races, current_race_idx: initial_race_idx,
             app_phase, hovered_menu_idx: None,
             use_neon_green,
+            use_metallic: false,
+            show_shadows: true,
         };
 
         state.rebuild_ui();
@@ -1472,6 +1476,23 @@ impl<'a> State<'a> {
         self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&active_stage.indices)); 
         self.num_indices = active_stage.indices.len() as u32;
 
+        self.rebuild_poly_buffers();
+
+        self.update_axes();
+ 
+        // Reset View
+        let rpw = (self.size.width as f64) - 350.0;
+        let graph_width = rpw * 0.8;
+        let margin_x = 350.0 + rpw * 0.1;
+        self.initial_scale = graph_width / (self.max_dist as f64);
+        self.pos_scale = self.initial_scale;
+        self.pos_translate = [margin_x, (self.size.height as f64 - 260.0) * 0.2];
+        
+        self.rebuild_ui();
+    }
+
+    fn rebuild_poly_buffers(&mut self) {
+        let active_stage = &self.stages[self.selected_stage_idx];
         let delta_e_displayed = self.max_dist * self.global_max_ratio_diff;
         let y_min = if self.max_ele <= delta_e_displayed {
             0.0
@@ -1524,9 +1545,9 @@ impl<'a> State<'a> {
             normals.push(n);
         }
 
-        // Smoothing pass ultra-large (window de 81 points) pour supprimer tout jitter de précision
+        // Smoothing pass: 61 points for metallic mode, 3 points (window 1) for standard mode
         self.smooth_normals = Vec::with_capacity(normals.len());
-        let window_size = 1; 
+        let window_size = if self.use_metallic { 30 } else { 1 }; 
         for i in 0..normals.len() {
             let mut sn = [0.0, 0.0];
             for j in -window_size..=window_size {
@@ -1550,7 +1571,6 @@ impl<'a> State<'a> {
             count += 1;
         }
 
-
         for i in 0..count - 1 {
             let b = (i * 2) as u32;
             poly_indices.extend_from_slice(&[b, b+2, b+1, b+1, b+2, b+3]);
@@ -1566,18 +1586,6 @@ impl<'a> State<'a> {
         });
         self.queue.write_buffer(&self.poly_index_buffer, 0, bytemuck::cast_slice(&poly_indices)); 
         self.num_poly_indices = poly_indices.len() as u32;
-
-        self.update_axes();
- 
-        // Reset View
-        let rpw = (self.size.width as f64) - 350.0;
-        let graph_width = rpw * 0.8;
-        let margin_x = 350.0 + rpw * 0.1;
-        self.initial_scale = graph_width / (self.max_dist as f64);
-        self.pos_scale = self.initial_scale;
-        self.pos_translate = [margin_x, (self.size.height as f64 - 260.0) * 0.2];
-        
-        self.rebuild_ui();
     }
 
     fn update(&mut self) {
@@ -1797,8 +1805,8 @@ impl<'a> State<'a> {
                 slope_y2: -1000.0,
                 capped_rel_scale: 1.0,
                 circle_thickness: 1.0,
-                pad1: 0.0,
-                pad2: 0.0,
+                pad1: if self.use_metallic { 1.0 } else { 0.0 },
+                pad2: if self.show_shadows { 1.0 } else { 0.0 },
                 pad3: 0.0,
             };
             self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
@@ -2116,8 +2124,8 @@ impl<'a> State<'a> {
             slope_y2,
             capped_rel_scale,
             circle_thickness: s_circle,
-            pad1: 0.0,
-            pad2: 0.0,
+            pad1: if self.use_metallic { 1.0 } else { 0.0 },
+            pad2: if self.show_shadows { 1.0 } else { 0.0 },
             pad3: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
@@ -2838,6 +2846,15 @@ fn main() {
                             state.race_color = race.meta.color;
                         }
                         state.rebuild_ui();
+                        state.window.request_redraw();
+                    }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("t") => {
+                        state.use_metallic = !state.use_metallic;
+                        state.rebuild_poly_buffers();
+                        state.window.request_redraw();
+                    }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("o") => {
+                        state.show_shadows = !state.show_shadows;
                         state.window.request_redraw();
                     }
                     _ => {
