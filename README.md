@@ -3,6 +3,9 @@
 Application de visualisation de tracés et de profils altimétriques de courses cyclistes (Tour de France 2026, Giro 2026, Vuelta 2026). Développée en Rust avec l'API graphique wgpu.
 
 
+https://github.com/user-attachments/assets/c86aed3a-abaa-4ec9-9c44-a9ecbcaa5350
+
+
 ---
 
 ## 🌟 Vues et Transitions
