@@ -1,0 +1,8 @@
+{
+  "use_metallic": true,
+  "use_neon_green": false,
+  "show_shadows": true,
+  "use_brushed": true,
+  "metallic_smoothing": 30,
+  "white_sky": false
+}

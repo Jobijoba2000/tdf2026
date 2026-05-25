@@ -28,6 +28,48 @@ struct RaceEntry {
     global_path: PathBuf,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct Settings {
+    use_metallic: bool,
+    use_neon_green: bool,
+    show_shadows: bool,
+    use_brushed: bool,
+    metallic_smoothing: u32,
+    white_sky: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            use_metallic: false,
+            use_neon_green: true,
+            show_shadows: true,
+            use_brushed: true,
+            metallic_smoothing: 30,
+            white_sky: false,
+        }
+    }
+}
+
+impl Settings {
+    fn load() -> Self {
+        let path = find_data_dir().parent().map(|p| p.join("settings.json")).unwrap_or_else(|| PathBuf::from("settings.json"));
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(settings) = serde_json::from_str::<Self>(&content) {
+                return settings;
+            }
+        }
+        Self::default()
+    }
+
+    fn save(&self) {
+        let path = find_data_dir().parent().map(|p| p.join("settings.json")).unwrap_or_else(|| PathBuf::from("settings.json"));
+        if let Ok(content) = serde_json::to_string_pretty(self) {
+            let _ = std::fs::write(&path, content);
+        }
+    }
+}
+
 fn discover_races(data_dir: &Path) -> Vec<RaceEntry> {
     let races_dir = data_dir.join("races");
     let mut entries = Vec::new();
@@ -151,6 +193,14 @@ struct Uniforms {
     pad1: f32,                         // 244-248
     pad2: f32,                         // 248-252
     pad3: f32,                         // 252-256 (align to 16 bytes)
+    pad4: f32,                         // 256-260
+    pad5: f32,                         // 260-264
+    pad6: f32,                         // 264-268
+    pad7: f32,                         // 268-272
+    pad8: f32,                         // 272-276
+    pad9: f32,                         // 276-280
+    pad10: f32,                        // 280-284
+    pad11: f32,                        // 284-288 (align to 16 bytes)
 }
 
 struct ZoomAnimation {
@@ -247,6 +297,14 @@ struct MorphAnimation {
     target_morph: f32,
 }
 
+#[derive(Copy, Clone)]
+struct SwitchAnimation {
+    start_time: std::time::Instant,
+    duration: std::time::Duration,
+    start_t: f32,
+    target_t: f32,
+}
+
 struct State<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
@@ -272,6 +330,8 @@ struct State<'a> {
     axes_render_pipeline: wgpu::RenderPipeline,
     global_render_pipeline: wgpu::RenderPipeline,
     global_fill_render_pipeline: wgpu::RenderPipeline,
+    dim_overlay_pipeline: wgpu::RenderPipeline,
+    settings_card_pipeline: wgpu::RenderPipeline,
 
     // Buffers & Resources
     uniform_bind_group: wgpu::BindGroup,
@@ -374,6 +434,19 @@ struct State<'a> {
     use_neon_green: bool,
     use_metallic: bool,
     show_shadows: bool,
+    show_settings: bool,
+    settings: Settings,
+    settings_switch_t: f32,
+    settings_switch_animation: Option<SwitchAnimation>,
+    settings_neon_green_t: f32,
+    settings_neon_green_animation: Option<SwitchAnimation>,
+    settings_brushed_t: f32,
+    settings_brushed_animation: Option<SwitchAnimation>,
+    use_brushed: bool,
+    is_dragging_slider: bool,
+    settings_white_sky_t: f32,
+    settings_white_sky_animation: Option<SwitchAnimation>,
+    use_white_sky: bool,
 }
 
 
@@ -425,7 +498,9 @@ impl<'a> State<'a> {
         let initial_race = available_races.get(initial_race_idx)
             .or_else(|| available_races.first())
             .expect("No races available — check data/races/ directory");
-        let use_neon_green = true;
+        let settings = Settings::load();
+        settings.save();
+        let use_neon_green = settings.use_neon_green;
         let race_color = if use_neon_green {
             [0.18, 1.0, 0.18, 1.0]
         } else {
@@ -846,6 +921,22 @@ impl<'a> State<'a> {
         // Sparkline fill pipeline
         let sparkline_fill_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { label: Some("Sparkline Fill Pipeline"), layout: Some(&pipeline_layout), vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] }, fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_sparkline_fill", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }), primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() }, depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None });
 
+        let dim_overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Dim Overlay Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_dim_overlay", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
+            primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None
+        });
+
+        let settings_card_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Settings Card Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_ui", buffers: &[wgpu::VertexBufferLayout { array_stride: 32, step_mode: wgpu::VertexStepMode::Vertex, attributes: &wgpu::vertex_attr_array![0 => Float32x4] }] },
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: "fs_settings_card", targets: &[Some(wgpu::ColorTargetState { format: config.format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })] }),
+            primitive: wgpu::PrimitiveState::default(), depth_stencil: None, multisample: wgpu::MultisampleState::default(), multiview: None
+        });
+
         let selected_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let hover_bg_buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 1024, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
 
@@ -899,6 +990,7 @@ impl<'a> State<'a> {
             render_pipeline, poly_render_pipeline, text_render_pipeline, text_ui_pipeline, text_screen_pipeline, text_3d_pipeline,
             ui_render_pipeline, selected_render_pipeline, hover_render_pipeline, sparkline_render_pipeline, sparkline_stroke_pipeline, sparkline_fill_render_pipeline, reticule_render_pipeline,
             axes_render_pipeline, global_render_pipeline, global_fill_render_pipeline,
+            dim_overlay_pipeline, settings_card_pipeline,
             uniform_bind_group, atlas_bind_group, uniform_buffer, depth_texture: depth_view,
             shadow_texture_view, shadow_bind_group, shadow_render_pipeline,
             vertex_buffer, index_buffer, poly_vertex_buffer, poly_index_buffer, axes_vertex_buffer, axes_index_buffer, static_text_buffer,
@@ -924,8 +1016,21 @@ impl<'a> State<'a> {
             race_color, race_name, available_races, current_race_idx: initial_race_idx,
             app_phase, hovered_menu_idx: None,
             use_neon_green,
-            use_metallic: false,
-            show_shadows: true,
+            use_metallic: settings.use_metallic,
+            show_shadows: settings.show_shadows,
+            show_settings: false,
+            settings_switch_t: if settings.use_metallic { 1.0 } else { 0.0 },
+            settings_switch_animation: None,
+            settings_neon_green_t: if settings.use_neon_green { 1.0 } else { 0.0 },
+            settings_neon_green_animation: None,
+            settings_brushed_t: if settings.use_brushed { 1.0 } else { 0.0 },
+            settings_brushed_animation: None,
+            use_brushed: settings.use_brushed,
+            settings_white_sky_t: if settings.white_sky { 1.0 } else { 0.0 },
+            settings_white_sky_animation: None,
+            use_white_sky: settings.white_sky,
+            settings,
+            is_dragging_slider: false,
         };
 
         state.rebuild_ui();
@@ -1545,9 +1650,9 @@ impl<'a> State<'a> {
             normals.push(n);
         }
 
-        // Smoothing pass: 61 points for metallic mode, 3 points (window 1) for standard mode
+        // Smoothing pass: dynamic window size for metallic mode, 3 points (window 1) for standard mode
         self.smooth_normals = Vec::with_capacity(normals.len());
-        let window_size = if self.use_metallic { 30 } else { 1 }; 
+        let window_size = if self.use_metallic { self.settings.metallic_smoothing as i32 } else { 1 }; 
         for i in 0..normals.len() {
             let mut sn = [0.0, 0.0];
             for j in -window_size..=window_size {
@@ -1641,6 +1746,69 @@ impl<'a> State<'a> {
             self.window.request_redraw();
         }
 
+        if let Some(anim) = self.settings_switch_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 3.0 * t * t - 2.0 * t * t * t; // Smoothstep easing
+            self.settings_switch_t = anim.start_t + (anim.target_t - anim.start_t) * eased_t;
+            
+            if t >= 1.0 {
+                self.settings_switch_t = anim.target_t;
+                self.settings_switch_animation = None;
+            }
+            self.window.request_redraw();
+        } else {
+            self.settings_switch_t = if self.use_metallic { 1.0 } else { 0.0 };
+        }
+
+        if let Some(anim) = self.settings_neon_green_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 3.0 * t * t - 2.0 * t * t * t; // Smoothstep easing
+            self.settings_neon_green_t = anim.start_t + (anim.target_t - anim.start_t) * eased_t;
+            
+            if t >= 1.0 {
+                self.settings_neon_green_t = anim.target_t;
+                self.settings_neon_green_animation = None;
+            }
+            self.window.request_redraw();
+        } else {
+            self.settings_neon_green_t = if self.use_neon_green { 1.0 } else { 0.0 };
+        }
+
+        if let Some(anim) = self.settings_brushed_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 3.0 * t * t - 2.0 * t * t * t; // Smoothstep easing
+            self.settings_brushed_t = anim.start_t + (anim.target_t - anim.start_t) * eased_t;
+            
+            if t >= 1.0 {
+                self.settings_brushed_t = anim.target_t;
+                self.settings_brushed_animation = None;
+            }
+            self.window.request_redraw();
+        } else {
+            self.settings_brushed_t = if self.use_brushed { 1.0 } else { 0.0 };
+        }
+
+        if let Some(anim) = self.settings_white_sky_animation {
+            let elapsed = anim.start_time.elapsed().as_secs_f32();
+            let duration = anim.duration.as_secs_f32();
+            let t = (elapsed / duration).min(1.0);
+            let eased_t = 3.0 * t * t - 2.0 * t * t * t; // Smoothstep easing
+            self.settings_white_sky_t = anim.start_t + (anim.target_t - anim.start_t) * eased_t;
+            
+            if t >= 1.0 {
+                self.settings_white_sky_t = anim.target_t;
+                self.settings_white_sky_animation = None;
+            }
+            self.window.request_redraw();
+        } else {
+            self.settings_white_sky_t = if self.use_white_sky { 1.0 } else { 0.0 };
+        }
 
         if let Some(anim) = &self.camera_animation {
             let elapsed = anim.start_time.elapsed().as_secs_f64();
@@ -1807,7 +1975,15 @@ impl<'a> State<'a> {
                 circle_thickness: 1.0,
                 pad1: if self.use_metallic { 1.0 } else { 0.0 },
                 pad2: if self.show_shadows { 1.0 } else { 0.0 },
-                pad3: 0.0,
+                pad3: self.settings_switch_t,
+                pad4: self.settings_neon_green_t,
+                pad5: if self.use_brushed { 1.0 } else { 0.0 },
+                pad6: self.settings_brushed_t,
+                pad7: (self.settings.metallic_smoothing.clamp(1, 1000) - 1) as f32 / 999.0,
+                pad8: self.settings_white_sky_t,
+                pad9: 0.0,
+                pad10: 0.0,
+                pad11: 0.0,
             };
             self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -2126,7 +2302,15 @@ impl<'a> State<'a> {
             circle_thickness: s_circle,
             pad1: if self.use_metallic { 1.0 } else { 0.0 },
             pad2: if self.show_shadows { 1.0 } else { 0.0 },
-            pad3: 0.0,
+            pad3: self.settings_switch_t,
+            pad4: self.settings_neon_green_t,
+            pad5: if self.use_brushed { 1.0 } else { 0.0 },
+            pad6: self.settings_brushed_t,
+            pad7: (self.settings.metallic_smoothing.clamp(1, 1000) - 1) as f32 / 999.0,
+            pad8: self.settings_white_sky_t,
+            pad9: 0.0,
+            pad10: 0.0,
+            pad11: 0.0,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -2677,6 +2861,13 @@ impl<'a> State<'a> {
             }
         }
 
+        #[allow(unused_assignments)]
+        let mut settings_bg_buf = None;
+        #[allow(unused_assignments)]
+        let mut settings_card_buf = None;
+        #[allow(unused_assignments)]
+        let mut settings_text_buf = None;
+
         // --- PASS 2: 2D UI without depth buffer ---
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2772,6 +2963,172 @@ impl<'a> State<'a> {
                 pass.set_vertex_buffer(0, self.header_text_buffer.slice(..));
                 pass.draw(0..self.num_header_text_vertices, 0..1);
             }
+
+            // 9. Settings Overlay
+            if self.show_settings {
+                pass.set_scissor_rect(0, 0, self.size.width, self.size.height);
+
+                let cx = self.size.width as f32 / 2.0;
+                let cy = self.size.height as f32 / 2.0;
+
+                // 9.1 backdrop vertices
+                let mut bg_verts = Vec::new();
+                let add_rect = |x0: f32, y0: f32, x1: f32, y1: f32, list: &mut Vec<PolyVertex>| {
+                    list.push(PolyVertex::new([x0, y0, 0.0, 0.0], 0.0));
+                    list.push(PolyVertex::new([x1, y0, 0.0, 0.0], 0.0));
+                    list.push(PolyVertex::new([x0, y1, 0.0, 0.0], 0.0));
+                    list.push(PolyVertex::new([x0, y1, 0.0, 0.0], 0.0));
+                    list.push(PolyVertex::new([x1, y0, 0.0, 0.0], 0.0));
+                    list.push(PolyVertex::new([x1, y1, 0.0, 0.0], 0.0));
+                };
+
+                // Fullscreen dim overlay
+                add_rect(0.0, 0.0, self.size.width as f32, self.size.height as f32, &mut bg_verts);
+                
+                // Settings Card backdrop (width 420, height 380) with local UV in pos.z/w
+                let card_w = 420.0f32;
+                let card_h = 380.0f32;
+                let x_min = cx - card_w * 0.5;
+                let x_max = cx + card_w * 0.5;
+                let y_min = cy - card_h * 0.5;
+                let y_max = cy + card_h * 0.5;
+                
+                let mut card_verts = Vec::new();
+                let add_card_rect = |x0: f32, y0: f32, x1: f32, y1: f32, list: &mut Vec<PolyVertex>| {
+                    list.push(PolyVertex::new([x0, y0, -1.0, -1.0], 0.0));
+                    list.push(PolyVertex::new([x1, y0,  1.0, -1.0], 0.0));
+                    list.push(PolyVertex::new([x0, y1, -1.0,  1.0], 0.0));
+                    list.push(PolyVertex::new([x0, y1, -1.0,  1.0], 0.0));
+                    list.push(PolyVertex::new([x1, y0,  1.0, -1.0], 0.0));
+                    list.push(PolyVertex::new([x1, y1,  1.0,  1.0], 0.0));
+                };
+                add_card_rect(x_min, y_min, x_max, y_max, &mut card_verts);
+                
+                use wgpu::util::DeviceExt;
+                settings_bg_buf = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Settings Dim BG Buf"), contents: bytemuck::cast_slice(&bg_verts), usage: wgpu::BufferUsages::VERTEX
+                }));
+                settings_card_buf = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Settings Card BG Buf"), contents: bytemuck::cast_slice(&card_verts), usage: wgpu::BufferUsages::VERTEX
+                }));
+
+                // Draw fullscreen backdrop
+                pass.set_pipeline(&self.dim_overlay_pipeline);
+                pass.set_vertex_buffer(0, settings_bg_buf.as_ref().unwrap().slice(..));
+                pass.draw(0..6, 0..1);
+
+                // Draw card backdrop
+                pass.set_pipeline(&self.settings_card_pipeline);
+                pass.set_vertex_buffer(0, settings_card_buf.as_ref().unwrap().slice(..));
+                pass.draw(0..6, 0..1);
+
+                // Draw text
+                if let Some(ref font) = self.fa {
+                    let mut settings_text_vertices = Vec::new();
+                    
+                    // Title "PARAMÈTRES"
+                    let title = "PARAMÈTRES";
+                    let (pos, uvs) = font.get_text_geometry(title);
+                    let mut title_w = 0.0f32;
+                    for c in title.chars() {
+                        if let Some(m) = font.metrics.get(&c).or_else(|| font.metrics.get(&' ')) {
+                            title_w += m.advance;
+                        }
+                    }
+                    let title_size = 0.7f32;
+                    let anchor_title = [cx - (title_w * title_size) / 2.0, y_max - 55.0];
+                    for k in 0..(pos.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos[k*2], pos[k*2+1]], uv: [uvs[k*2], uvs[k*2+1]], anchor: anchor_title, size: title_size, depth: 0.0 });
+                    }
+
+                    let lbl_size = 0.5f32;
+                    let metallic_depth = if self.use_metallic { 0.0 } else { 1.0 };
+
+                    // Render mode selection (local Y = 80.0)
+                    let label1 = "Rendu métallisé";
+                    let (pos_lbl1, uvs_lbl1) = font.get_text_geometry(label1);
+                    let anchor_lbl1 = [x_min + 40.0, cy + 80.0 - 8.0];
+                    for k in 0..(pos_lbl1.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl1[k*2], pos_lbl1[k*2+1]], uv: [uvs_lbl1[k*2], uvs_lbl1[k*2+1]], anchor: anchor_lbl1, size: lbl_size, depth: 0.0 });
+                    }
+
+                    // Render mode shortcut indicator [T]
+                    let sc1 = "[T]";
+                    let (pos_sc1, uvs_sc1) = font.get_text_geometry(sc1);
+                    let anchor_sc1 = [cx + 160.0, cy + 80.0 - 8.0];
+                    for k in 0..(pos_sc1.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_sc1[k*2], pos_sc1[k*2+1]], uv: [uvs_sc1[k*2], uvs_sc1[k*2+1]], anchor: anchor_sc1, size: lbl_size, depth: 0.0 });
+                    }
+
+                    // Brushed Metal selection (local Y = 40.0)
+                    let label_brushed = "Effet brossé";
+                    let (pos_lbl_b, uvs_lbl_b) = font.get_text_geometry(label_brushed);
+                    let anchor_lbl_b = [x_min + 40.0, cy + 40.0 - 8.0];
+                    let brushed_depth = if self.use_metallic { 0.0 } else { 1.0 };
+                    for k in 0..(pos_lbl_b.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl_b[k*2], pos_lbl_b[k*2+1]], uv: [uvs_lbl_b[k*2], uvs_lbl_b[k*2+1]], anchor: anchor_lbl_b, size: lbl_size, depth: brushed_depth });
+                    }
+
+                    // Brushed Metal shortcut indicator [B]
+                    let sc_brushed = "[B]";
+                    let (pos_sc_b, uvs_sc_b) = font.get_text_geometry(sc_brushed);
+                    let anchor_sc_b = [cx + 160.0, cy + 40.0 - 8.0];
+                    for k in 0..(pos_sc_b.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_sc_b[k*2], pos_sc_b[k*2+1]], uv: [uvs_sc_b[k*2], uvs_sc_b[k*2+1]], anchor: anchor_sc_b, size: lbl_size, depth: brushed_depth });
+                    }
+
+                    // White Sky selection (local Y = 0.0)
+                    let label_sky = "Ciel blanc";
+                    let (pos_lbl_sky, uvs_lbl_sky) = font.get_text_geometry(label_sky);
+                    let anchor_lbl_sky = [x_min + 40.0, cy + 0.0 - 8.0];
+                    for k in 0..(pos_lbl_sky.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl_sky[k*2], pos_lbl_sky[k*2+1]], uv: [uvs_lbl_sky[k*2], uvs_lbl_sky[k*2+1]], anchor: anchor_lbl_sky, size: lbl_size, depth: metallic_depth });
+                    }
+
+                    // White Sky shortcut indicator [W]
+                    let sc_sky = "[W]";
+                    let (pos_sc_sky, uvs_sc_sky) = font.get_text_geometry(sc_sky);
+                    let anchor_sc_sky = [cx + 160.0, cy + 0.0 - 8.0];
+                    for k in 0..(pos_sc_sky.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_sc_sky[k*2], pos_sc_sky[k*2+1]], uv: [uvs_sc_sky[k*2], uvs_sc_sky[k*2+1]], anchor: anchor_sc_sky, size: lbl_size, depth: metallic_depth });
+                    }
+
+                    // Lissage selection (local Y = -40.0)
+                    let label_smooth = format!("Lissage: {}", self.settings.metallic_smoothing);
+                    let (pos_lbl_s, uvs_lbl_s) = font.get_text_geometry(&label_smooth);
+                    let anchor_lbl_s = [x_min + 40.0, cy - 40.0 - 8.0];
+                    for k in 0..(pos_lbl_s.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl_s[k*2], pos_lbl_s[k*2+1]], uv: [uvs_lbl_s[k*2], uvs_lbl_s[k*2+1]], anchor: anchor_lbl_s, size: lbl_size, depth: metallic_depth });
+                    }
+
+                    // Neon Green selection (local Y = -125.0)
+                    let label2 = "Vert néon";
+                    let (pos_lbl2, uvs_lbl2) = font.get_text_geometry(label2);
+                    let anchor_lbl2 = [x_min + 40.0, cy - 125.0 - 8.0];
+                    for k in 0..(pos_lbl2.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl2[k*2], pos_lbl2[k*2+1]], uv: [uvs_lbl2[k*2], uvs_lbl2[k*2+1]], anchor: anchor_lbl2, size: lbl_size, depth: 0.0 });
+                    }
+
+                    // Neon Green shortcut indicator [C]
+                    let sc2 = "[C]";
+                    let (pos_sc2, uvs_sc2) = font.get_text_geometry(sc2);
+                    let anchor_sc2 = [cx + 160.0, cy - 125.0 - 8.0];
+                    for k in 0..(pos_sc2.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_sc2[k*2], pos_sc2[k*2+1]], uv: [uvs_sc2[k*2], uvs_sc2[k*2+1]], anchor: anchor_sc2, size: lbl_size, depth: 0.0 });
+                    }
+
+                    settings_text_buf = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Settings Text Buf"), contents: bytemuck::cast_slice(&settings_text_vertices), usage: wgpu::BufferUsages::VERTEX
+                    }));
+
+                    if let Some(ref bg) = self.atlas_bind_group {
+                        pass.set_pipeline(&self.text_ui_pipeline);
+                        pass.set_bind_group(1, bg, &[]);
+                        pass.set_vertex_buffer(0, settings_text_buf.as_ref().unwrap().slice(..));
+                        pass.draw(0..(settings_text_vertices.len() as u32), 0..1);
+                    }
+                }
+            }
         }
 
 
@@ -2820,6 +3177,85 @@ fn main() {
         Event::WindowEvent { ref event, window_id } if window_id == state.window.id() => match event {
             WindowEvent::CloseRequested => elwt.exit(),
             WindowEvent::KeyboardInput { event: KeyEvent { logical_key: key, state: ElementState::Pressed, .. }, .. } => {
+                if state.show_settings {
+                    match key {
+                        Key::Named(NamedKey::Escape) => {
+                            state.show_settings = false;
+                            state.window.request_redraw();
+                        }
+                        Key::Character(ref s) if s.eq_ignore_ascii_case("p") => {
+                            state.show_settings = false;
+                            state.window.request_redraw();
+                        }
+                        Key::Character(ref s) if s.eq_ignore_ascii_case("t") => {
+                            state.use_metallic = !state.use_metallic;
+                            state.settings.use_metallic = state.use_metallic;
+                            state.settings.save();
+                            state.rebuild_poly_buffers();
+                            let target_t = if state.use_metallic { 1.0 } else { 0.0 };
+                            state.settings_switch_animation = Some(SwitchAnimation {
+                                start_time: std::time::Instant::now(),
+                                duration: std::time::Duration::from_millis(250),
+                                start_t: state.settings_switch_t,
+                                target_t,
+                            });
+                            state.window.request_redraw();
+                        }
+                        Key::Character(ref s) if s.eq_ignore_ascii_case("c") => {
+                            state.use_neon_green = !state.use_neon_green;
+                            state.settings.use_neon_green = state.use_neon_green;
+                            state.settings.save();
+                            if state.use_neon_green {
+                                state.race_color = [0.18, 1.0, 0.18, 1.0];
+                            } else {
+                                let race = state.available_races[state.current_race_idx].clone();
+                                state.race_color = race.meta.color;
+                            }
+                            state.rebuild_ui();
+                            let target_t = if state.use_neon_green { 1.0 } else { 0.0 };
+                            state.settings_neon_green_animation = Some(SwitchAnimation {
+                                start_time: std::time::Instant::now(),
+                                duration: std::time::Duration::from_millis(250),
+                                start_t: state.settings_neon_green_t,
+                                target_t,
+                            });
+                            state.window.request_redraw();
+                        }
+                        Key::Character(ref s) if s.eq_ignore_ascii_case("b") => {
+                            if state.use_metallic {
+                                state.use_brushed = !state.use_brushed;
+                                state.settings.use_brushed = state.use_brushed;
+                                state.settings.save();
+                                let target_t = if state.use_brushed { 1.0 } else { 0.0 };
+                                state.settings_brushed_animation = Some(SwitchAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(250),
+                                    start_t: state.settings_brushed_t,
+                                    target_t,
+                                });
+                                state.window.request_redraw();
+                            }
+                        }
+                        Key::Character(ref s) if s.eq_ignore_ascii_case("w") => {
+                            if state.use_metallic {
+                                state.use_white_sky = !state.use_white_sky;
+                                state.settings.white_sky = state.use_white_sky;
+                                state.settings.save();
+                                let target_t = if state.use_white_sky { 1.0 } else { 0.0 };
+                                state.settings_white_sky_animation = Some(SwitchAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(250),
+                                    start_t: state.settings_white_sky_t,
+                                    target_t,
+                                });
+                                state.window.request_redraw();
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
                 match key {
                     Key::Named(NamedKey::Escape) => elwt.exit(),
                     Key::Named(NamedKey::F11) => {
@@ -2830,6 +3266,10 @@ fn main() {
                             state.window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
                         }
                     }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("p") => {
+                        state.show_settings = true;
+                        state.window.request_redraw();
+                    }
                     Key::Character(ref s) if s.eq_ignore_ascii_case("m") => {
                         state.app_phase = match state.app_phase {
                             AppPhase::Menu => AppPhase::Racing,
@@ -2839,6 +3279,8 @@ fn main() {
                     }
                     Key::Character(ref s) if s.eq_ignore_ascii_case("c") => {
                         state.use_neon_green = !state.use_neon_green;
+                        state.settings.use_neon_green = state.use_neon_green;
+                        state.settings.save();
                         if state.use_neon_green {
                             state.race_color = [0.18, 1.0, 0.18, 1.0];
                         } else {
@@ -2846,16 +3288,64 @@ fn main() {
                             state.race_color = race.meta.color;
                         }
                         state.rebuild_ui();
+                        let target_t = if state.use_neon_green { 1.0 } else { 0.0 };
+                        state.settings_neon_green_animation = Some(SwitchAnimation {
+                            start_time: std::time::Instant::now(),
+                            duration: std::time::Duration::from_millis(250),
+                            start_t: state.settings_neon_green_t,
+                            target_t,
+                        });
                         state.window.request_redraw();
                     }
                     Key::Character(ref s) if s.eq_ignore_ascii_case("t") => {
                         state.use_metallic = !state.use_metallic;
+                        state.settings.use_metallic = state.use_metallic;
+                        state.settings.save();
                         state.rebuild_poly_buffers();
+                        let target_t = if state.use_metallic { 1.0 } else { 0.0 };
+                        state.settings_switch_animation = Some(SwitchAnimation {
+                            start_time: std::time::Instant::now(),
+                            duration: std::time::Duration::from_millis(250),
+                            start_t: state.settings_switch_t,
+                            target_t,
+                        });
                         state.window.request_redraw();
                     }
                     Key::Character(ref s) if s.eq_ignore_ascii_case("o") => {
                         state.show_shadows = !state.show_shadows;
+                        state.settings.show_shadows = state.show_shadows;
+                        state.settings.save();
                         state.window.request_redraw();
+                    }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("b") => {
+                        if state.use_metallic {
+                            state.use_brushed = !state.use_brushed;
+                            state.settings.use_brushed = state.use_brushed;
+                            state.settings.save();
+                            let target_t = if state.use_brushed { 1.0 } else { 0.0 };
+                            state.settings_brushed_animation = Some(SwitchAnimation {
+                                start_time: std::time::Instant::now(),
+                                duration: std::time::Duration::from_millis(250),
+                                start_t: state.settings_brushed_t,
+                                target_t,
+                            });
+                            state.window.request_redraw();
+                        }
+                    }
+                    Key::Character(ref s) if s.eq_ignore_ascii_case("w") => {
+                        if state.use_metallic {
+                            state.use_white_sky = !state.use_white_sky;
+                            state.settings.white_sky = state.use_white_sky;
+                            state.settings.save();
+                            let target_t = if state.use_white_sky { 1.0 } else { 0.0 };
+                            state.settings_white_sky_animation = Some(SwitchAnimation {
+                                start_time: std::time::Instant::now(),
+                                duration: std::time::Duration::from_millis(250),
+                                start_t: state.settings_white_sky_t,
+                                target_t,
+                            });
+                            state.window.request_redraw();
+                        }
                     }
                     _ => {
                         if state.app_phase == AppPhase::Racing {
@@ -2964,6 +3454,22 @@ fn main() {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 state.mouse_pos = [position.x as f32, (state.size.height as f64 - position.y) as f32];
+                if state.show_settings {
+                    if state.is_dragging_slider {
+                        let cx = state.size.width as f32 / 2.0;
+                        let mx = state.mouse_pos[0];
+                        let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
+                        let val = 1 + (ratio * 999.0).round() as u32;
+                        if val != state.settings.metallic_smoothing {
+                            state.settings.metallic_smoothing = val;
+                            state.settings.save();
+                            state.rebuild_poly_buffers();
+                        }
+                        state.window.request_redraw();
+                    }
+                    state.last_mouse_pos = [position.x as f32, position.y as f32];
+                    return;
+                }
                 if state.app_phase == AppPhase::Menu {
                     state.hovered_menu_idx = state.get_hovered_menu_card();
                     state.hover_stage_idx = None;
@@ -3004,6 +3510,96 @@ fn main() {
                 state.last_mouse_pos = [position.x as f32, position.y as f32];
             }
             WindowEvent::MouseInput { state: s, button, .. } => {
+                if *button == MouseButton::Left && *s == ElementState::Released {
+                    state.is_dragging_slider = false;
+                }
+                if state.show_settings {
+                    if *button == MouseButton::Left && *s == ElementState::Pressed {
+                        let cx = state.size.width as f32 / 2.0;
+                        let cy = state.size.height as f32 / 2.0;
+                        let mx = state.mouse_pos[0];
+                        let my = state.mouse_pos[1];
+                        
+                        if mx >= cx - 210.0 && mx <= cx + 210.0 && my >= cy - 190.0 && my <= cy + 190.0 {
+                            if my >= cy + 60.0 {
+                                // Switch 1: Rendu métallisé (Y center +80.0, band [+60, +190])
+                                state.use_metallic = !state.use_metallic;
+                                state.settings.use_metallic = state.use_metallic;
+                                state.settings.save();
+                                state.rebuild_poly_buffers();
+                                let target_t = if state.use_metallic { 1.0 } else { 0.0 };
+                                state.settings_switch_animation = Some(SwitchAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(250),
+                                    start_t: state.settings_switch_t,
+                                    target_t,
+                                });
+                            } else if my >= cy + 20.0 {
+                                // Switch 2: Effet brossé (Y center +40.0, band [+20, +60])
+                                if state.use_metallic {
+                                    state.use_brushed = !state.use_brushed;
+                                    state.settings.use_brushed = state.use_brushed;
+                                    state.settings.save();
+                                    let target_t = if state.use_brushed { 1.0 } else { 0.0 };
+                                    state.settings_brushed_animation = Some(SwitchAnimation {
+                                        start_time: std::time::Instant::now(),
+                                        duration: std::time::Duration::from_millis(250),
+                                        start_t: state.settings_brushed_t,
+                                        target_t,
+                                    });
+                                }
+                            } else if my >= cy - 20.0 {
+                                // Switch 3: Ciel blanc (Y center 0.0, band [-20, +20])
+                                if state.use_metallic {
+                                    state.use_white_sky = !state.use_white_sky;
+                                    state.settings.white_sky = state.use_white_sky;
+                                    state.settings.save();
+                                    let target_t = if state.use_white_sky { 1.0 } else { 0.0 };
+                                    state.settings_white_sky_animation = Some(SwitchAnimation {
+                                        start_time: std::time::Instant::now(),
+                                        duration: std::time::Duration::from_millis(250),
+                                        start_t: state.settings_white_sky_t,
+                                        target_t,
+                                    });
+                                }
+                            } else if my >= cy - 97.5 {
+                                // Slider: Lissage (Y center -70.0, band [-97.5, -20])
+                                if state.use_metallic {
+                                    state.is_dragging_slider = true;
+                                    let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
+                                    state.settings.metallic_smoothing = 1 + (ratio * 999.0).round() as u32;
+                                    state.settings.save();
+                                    state.rebuild_poly_buffers();
+                                }
+                            } else {
+                                // Switch 4: Vert néon (Y center -125.0, band [-190, -97.5])
+                                state.use_neon_green = !state.use_neon_green;
+                                state.settings.use_neon_green = state.use_neon_green;
+                                state.settings.save();
+                                if state.use_neon_green {
+                                    state.race_color = [0.18, 1.0, 0.18, 1.0];
+                                } else {
+                                    let race = state.available_races[state.current_race_idx].clone();
+                                    state.race_color = race.meta.color;
+                                }
+                                state.rebuild_ui();
+                                let target_t = if state.use_neon_green { 1.0 } else { 0.0 };
+                                state.settings_neon_green_animation = Some(SwitchAnimation {
+                                    start_time: std::time::Instant::now(),
+                                    duration: std::time::Duration::from_millis(250),
+                                    start_t: state.settings_neon_green_t,
+                                    target_t,
+                                });
+                            }
+                            state.window.request_redraw();
+                        } else {
+                            state.show_settings = false;
+                            state.window.request_redraw();
+                        }
+                    }
+                    return;
+                }
+
                 if *button == MouseButton::Left {
                     state.mouse_pressed = *s == ElementState::Pressed;
                     
@@ -3064,6 +3660,9 @@ fn main() {
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                if state.show_settings {
+                    return;
+                }
                 if state.app_phase == AppPhase::Menu {
                     return;
                 }

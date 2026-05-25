@@ -27,6 +27,14 @@ struct Uniforms {
     pad1: f32,                 // 244-248
     pad2: f32,                 // 248-252
     pad3: f32,                 // 252-256
+    pad4: f32,                 // 256-260
+    pad5: f32,                 // 260-264
+    pad6: f32,                 // 264-268
+    pad7: f32,                 // 268-272
+    pad8: f32,                 // 272-276
+    pad9: f32,                 // 276-280
+    pad10: f32,                // 280-284
+    pad11: f32,                // 284-288
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -181,14 +189,14 @@ fn vs_shadow(model: PolyVertexInput) -> @builtin(position) vec4<f32> {
 
 
 @vertex
-fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
+fn vs_ui(@location(0) pos_and_uv: vec4<f32>) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = vec4<f32>(
-        (pos.x / uniforms.resolution.x) * 2.0 - 1.0,
-        (pos.y / uniforms.resolution.y) * 2.0 - 1.0,
+        (pos_and_uv.x / uniforms.resolution.x) * 2.0 - 1.0,
+        (pos_and_uv.y / uniforms.resolution.y) * 2.0 - 1.0,
         0.0, 1.0
     );
-    out.uv = vec2<f32>(0.0, 0.0);
+    out.uv = pos_and_uv.zw;
     out.morph = uniforms.morph;
     out.normal = vec3<f32>(0.0, 0.0, 1.0);
     return out;
@@ -197,6 +205,105 @@ fn vs_ui(@location(0) pos: vec2<f32>) -> VertexOutput {
 @fragment
 fn fs_sidebar_bg(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.1, 0.1, 0.1, 1.0);
+}
+
+@fragment
+fn fs_dim_overlay(in: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 0.6);
+}
+
+fn sd_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+    let q = abs(p) - b + vec2<f32>(r);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
+}
+
+
+@fragment
+fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
+    let half_size = vec2<f32>(210.0, 190.0);
+    let local_p = in.uv * half_size;
+
+    let d_card = sd_rounded_rect(local_p, half_size, 24.0);
+    if (d_card > 1.0) { discard; }
+
+    var col = vec3<f32>(0.07, 0.08, 0.11);
+
+    let light_pos = vec2<f32>(0.0, 190.0);
+    let dist_to_light = length(local_p - light_pos);
+    col += vec3<f32>(smoothstep(300.0, 0.0, dist_to_light) * 0.05);
+
+    let d_border = abs(d_card) - 0.75;
+    let border_mask = smoothstep(0.5, -0.5, d_border);
+    let glow = exp(-0.15 * abs(d_card)) * 0.25;
+    col = mix(col, mix(col, uniforms.color.rgb, border_mask + glow), border_mask + glow);
+
+    let switch_half = vec2<f32>(28.0, 14.0);
+    let switch_bg_off = vec3<f32>(0.15, 0.17, 0.22);
+    let knob_col = vec3<f32>(0.96, 0.97, 0.99);
+    let is_metallic_active = uniforms.pad1;
+    let dim_opacity = mix(0.35, 1.0, is_metallic_active);
+
+    // Switch 1: Rendu metallise (Y = 80)
+    let sc1 = vec2<f32>(100.0, 80.0);
+    let d_sw1 = sd_rounded_rect(local_p - sc1, switch_half, 14.0);
+    let t1 = uniforms.pad3;
+    let sw1_col = mix(switch_bg_off, uniforms.color.rgb, t1);
+    col = mix(col, sw1_col, smoothstep(0.5, -0.5, d_sw1));
+    col = mix(col, vec3<f32>(0.28, 0.32, 0.40), smoothstep(0.5, -0.5, abs(d_sw1) - 1.0) * (1.0 - t1));
+    let kp1 = sc1 + vec2<f32>(-14.0 + 28.0 * t1, 0.0);
+    let dk1 = length(local_p - kp1) - 10.0;
+    col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk1) * (1.0 - smoothstep(0.5, -0.5, dk1)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk1));
+
+    // Switch 2: Effet brosse (Y = 40)
+    let sc2 = vec2<f32>(100.0, 40.0);
+    let d_sw2 = sd_rounded_rect(local_p - sc2, switch_half, 14.0);
+    let t2 = uniforms.pad6;
+    let sw2_col = mix(switch_bg_off, uniforms.color.rgb, t2);
+    col = mix(col, sw2_col, smoothstep(0.5, -0.5, d_sw2) * dim_opacity);
+    col = mix(col, vec3<f32>(0.28, 0.32, 0.40), smoothstep(0.5, -0.5, abs(d_sw2) - 1.0) * dim_opacity * (1.0 - t2));
+    let kp2 = sc2 + vec2<f32>(-14.0 + 28.0 * t2, 0.0);
+    let dk2 = length(local_p - kp2) - 10.0;
+    col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk2) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk2)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk2) * dim_opacity);
+
+    // Switch 3: Ciel blanc (Y = 0)
+    let sc_sky = vec2<f32>(100.0, 0.0);
+    let d_sw_sky = sd_rounded_rect(local_p - sc_sky, switch_half, 14.0);
+    let t_sky = uniforms.pad8;
+    let sw_sky_col = mix(switch_bg_off, uniforms.color.rgb, t_sky);
+    col = mix(col, sw_sky_col, smoothstep(0.5, -0.5, d_sw_sky) * dim_opacity);
+    col = mix(col, vec3<f32>(0.28, 0.32, 0.40), smoothstep(0.5, -0.5, abs(d_sw_sky) - 1.0) * dim_opacity * (1.0 - t_sky));
+    let kp_sky = sc_sky + vec2<f32>(-14.0 + 28.0 * t_sky, 0.0);
+    let dk_sky = length(local_p - kp_sky) - 10.0;
+    col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk_sky) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk_sky)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk_sky) * dim_opacity);
+
+    // Slider: Lissage (Y = -70)
+    let sl_center = vec2<f32>(0.0, -70.0);
+    let d_track = sd_rounded_rect(local_p - sl_center, vec2<f32>(170.0, 3.0), 3.0);
+    let knob_x4 = -170.0 + 340.0 * uniforms.pad7;
+    let is_left = step(local_p.x - sl_center.x, knob_x4);
+    let track_col = mix(switch_bg_off, uniforms.color.rgb, is_left);
+    col = mix(col, track_col, smoothstep(0.5, -0.5, d_track) * dim_opacity);
+    let kp4 = sl_center + vec2<f32>(knob_x4, 0.0);
+    let dk4 = length(local_p - kp4) - 8.0;
+    col = mix(col, col * 0.3, smoothstep(3.0, -1.0, dk4) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk4)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk4) * dim_opacity);
+
+    // Switch 4: Vert neon (Y = -125)
+    let sc4 = vec2<f32>(100.0, -125.0);
+    let d_sw4 = sd_rounded_rect(local_p - sc4, switch_half, 14.0);
+    let t4 = uniforms.pad4;
+    let sw4_col = mix(switch_bg_off, vec3<f32>(0.18, 1.0, 0.18), t4);
+    col = mix(col, sw4_col, smoothstep(0.5, -0.5, d_sw4));
+    col = mix(col, vec3<f32>(0.28, 0.32, 0.40), smoothstep(0.5, -0.5, abs(d_sw4) - 1.0) * (1.0 - t4));
+    let kp4b = sc4 + vec2<f32>(-14.0 + 28.0 * t4, 0.0);
+    let dk4b = length(local_p - kp4b) - 10.0;
+    col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk4b) * (1.0 - smoothstep(0.5, -0.5, dk4b)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk4b));
+
+    return vec4<f32>(col, smoothstep(0.5, -0.5, d_card) * 0.96);
 }
 
 @fragment
@@ -268,10 +375,15 @@ fn fs_poly(in: VertexOutput, @builtin(front_facing) is_front_facing: bool) -> @l
         // Solution 4 : Métal brossé / Rugosité (bruit sur les normales)
         let noise_val = sin(in.world_pos.x * 3.0) * cos(in.world_pos.y * 3.0) * sin(in.world_pos.z * 5.0);
         let noise_amp = 0.08;
-        let perturbed_normal = normalize(rotated_normal + vec3<f32>(noise_val * noise_amp, noise_val * noise_amp, noise_val * noise_amp * 0.3));
+        var perturbed_normal = rotated_normal;
+        if (uniforms.pad5 > 0.5) {
+            perturbed_normal = normalize(rotated_normal + vec3<f32>(noise_val * noise_amp, noise_val * noise_amp, noise_val * noise_amp * 0.3));
+        }
         
         let R = reflect(-view_dir, perturbed_normal);
-        let sky_color = vec3<f32>(0.5, 0.7, 1.0) * 0.9;
+        let blue_sky = vec3<f32>(0.5, 0.7, 1.0) * 0.9;
+        let white_sky = vec3<f32>(0.95, 0.97, 1.0);
+        let sky_color = mix(blue_sky, white_sky, uniforms.pad8);
         let ground_color = vec3<f32>(0.12, 0.12, 0.15);
         let env_gradient = mix(ground_color, sky_color, R.y * 0.5 + 0.5);
         
@@ -426,6 +538,7 @@ struct TextVertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) is_circle: f32,
+    @location(2) depth: f32,
 };
 
 @vertex
@@ -443,6 +556,7 @@ fn vs_text(in: TextVertexInput) -> TextVertexOutput {
     );
     out.uv = in.uv;
     out.is_circle = 0.0;
+    out.depth = in.depth;
     return out;
 }
 
@@ -462,6 +576,7 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
         );
         out.uv = in.uv;
         out.is_circle = 1.0;
+        out.depth = in.depth;
         return out;
     }
     if (s < 0.0) {
@@ -476,6 +591,7 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
     );
     out.uv = in.uv;
     out.is_circle = 0.0;
+    out.depth = in.depth;
     return out;
 }
 
@@ -490,6 +606,7 @@ fn vs_text_ui(in: TextVertexInput) -> TextVertexOutput {
     );
     out.uv = in.uv;
     out.is_circle = 0.0;
+    out.depth = in.depth;
     return out;
 }
 
@@ -537,8 +654,14 @@ fn fs_text_graph(in: TextVertexOutput) -> @location(0) vec4<f32> {
     
     // Simuler du gras
     let bold_a = smoothstep(0.12, 0.42, a_center);
-    let final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), bold_a);
-    return vec4<f32>(final_color, max(bold_a, outline));
+    var final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0), bold_a);
+    var final_alpha = max(bold_a, outline);
+    if (in.depth > 0.5) {
+        // Grayed out
+        final_color = mix(vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.4, 0.4, 0.45), bold_a);
+        final_alpha = final_alpha * 0.45;
+    }
+    return vec4<f32>(final_color, final_alpha);
 }
 
 
@@ -647,4 +770,4 @@ fn fs_global(in: GlobalVertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_global_fill(in: GlobalFillOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.26, 0.26, 0.26, 1.0);
-}
+}
