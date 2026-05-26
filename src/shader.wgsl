@@ -576,7 +576,7 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
         );
         out.uv = in.uv;
         out.is_circle = 1.0;
-        out.depth = in.depth;
+        out.depth = 0.0; // Prevent gray-out effect in fs_text_graph
         return out;
     }
     if (s < 0.0) {
@@ -591,7 +591,7 @@ fn vs_text_screen(in: TextVertexInput) -> TextVertexOutput {
     );
     out.uv = in.uv;
     out.is_circle = 0.0;
-    out.depth = in.depth;
+    out.depth = 0.0; // Prevent gray-out effect in fs_text_graph
     return out;
 }
 
