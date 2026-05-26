@@ -1,8 +1,14 @@
 {
   "use_metallic": true,
-  "use_neon_green": false,
+  "use_neon_green": true,
   "show_shadows": true,
   "use_brushed": true,
   "metallic_smoothing": 30,
-  "white_sky": false
+  "white_sky": false,
+  "races": {
+    "tdf": {
+      "exaggeration_2d": 0.0,
+      "exaggeration_3d": 0.0
+    }
+  }
 }

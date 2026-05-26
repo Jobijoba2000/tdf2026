@@ -29,6 +29,29 @@ struct RaceEntry {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct RaceExaggeration {
+    exaggeration_2d: f32,
+    exaggeration_3d: f32,
+}
+
+impl Default for RaceExaggeration {
+    fn default() -> Self {
+        Self {
+            exaggeration_2d: 1.0,
+            exaggeration_3d: 1.0,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum DraggingSlider {
+    None,
+    Lissage,
+    Exaggeration2d,
+    Exaggeration3d,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 struct Settings {
     use_metallic: bool,
     use_neon_green: bool,
@@ -36,6 +59,8 @@ struct Settings {
     use_brushed: bool,
     metallic_smoothing: u32,
     white_sky: bool,
+    #[serde(default)]
+    races: std::collections::HashMap<String, RaceExaggeration>,
 }
 
 impl Default for Settings {
@@ -47,6 +72,7 @@ impl Default for Settings {
             use_brushed: true,
             metallic_smoothing: 30,
             white_sky: false,
+            races: std::collections::HashMap::new(),
         }
     }
 }
@@ -198,7 +224,7 @@ struct Uniforms {
     pad6: f32,                         // 264-268
     pad7: f32,                         // 268-272
     pad8: f32,                         // 272-276
-    pad9: f32,                         // 276-280
+    y_stretch_3d: f32,                 // 276-280
     pad10: f32,                        // 280-284
     pad11: f32,                        // 284-288 (align to 16 bytes)
 }
@@ -443,7 +469,7 @@ struct State<'a> {
     settings_brushed_t: f32,
     settings_brushed_animation: Option<SwitchAnimation>,
     use_brushed: bool,
-    is_dragging_slider: bool,
+    dragging_slider: DraggingSlider,
     settings_white_sky_t: f32,
     settings_white_sky_animation: Option<SwitchAnimation>,
     use_white_sky: bool,
@@ -1030,7 +1056,7 @@ impl<'a> State<'a> {
             settings_white_sky_animation: None,
             use_white_sky: settings.white_sky,
             settings,
-            is_dragging_slider: false,
+            dragging_slider: DraggingSlider::None,
         };
 
         state.rebuild_ui();
@@ -1172,6 +1198,28 @@ impl<'a> State<'a> {
         self.sidebar_animation = None;
 
         self.rebuild_ui();
+    }
+
+    fn current_race_id(&self) -> String {
+        self.available_races[self.current_race_idx].meta.id.clone()
+    }
+
+    fn get_current_race_exaggeration(&self) -> (f32, f32) {
+        let race_id = self.current_race_id();
+        if let Some(re) = self.settings.races.get(&race_id) {
+            (re.exaggeration_2d, re.exaggeration_3d)
+        } else {
+            (1.0, 1.0)
+        }
+    }
+
+    fn set_current_race_exaggeration(&mut self, ex_2d: f32, ex_3d: f32) {
+        let race_id = self.current_race_id();
+        self.settings.races.insert(race_id, RaceExaggeration {
+            exaggeration_2d: ex_2d,
+            exaggeration_3d: ex_3d,
+        });
+        self.settings.save();
     }
 
     fn get_hovered_menu_card(&self) -> Option<usize> {
@@ -1981,7 +2029,7 @@ impl<'a> State<'a> {
                 pad6: self.settings_brushed_t,
                 pad7: (self.settings.metallic_smoothing.clamp(1, 1000) - 1) as f32 / 999.0,
                 pad8: self.settings_white_sky_t,
-                pad9: 0.0,
+                y_stretch_3d: 0.0,
                 pad10: 0.0,
                 pad11: 0.0,
             };
@@ -2170,7 +2218,10 @@ impl<'a> State<'a> {
 
         let graph_height = (self.size.height as f64 - 260.0) * 0.5;
         let delta_e_displayed = (self.max_dist as f64) * (self.global_max_ratio_diff as f64);
-        let y_stretch = graph_height / (delta_e_displayed * self.initial_scale); 
+        let y_stretch_max = graph_height / (delta_e_displayed * self.initial_scale); 
+        let (ex_2d, ex_3d) = self.get_current_race_exaggeration();
+        let y_stretch = 1.0 + (y_stretch_max - 1.0) * ex_2d as f64;
+        let y_stretch_3d = 1.0 + (y_stretch_max * 0.5 - 1.0) * ex_3d as f64;
         
         // Commencer à 0m si max_ele rentre dans la plage affichée
         let delta_e_displayed = self.max_dist as f64 * self.global_max_ratio_diff as f64;
@@ -2308,9 +2359,9 @@ impl<'a> State<'a> {
             pad6: self.settings_brushed_t,
             pad7: (self.settings.metallic_smoothing.clamp(1, 1000) - 1) as f32 / 999.0,
             pad8: self.settings_white_sky_t,
-            pad9: 0.0,
-            pad10: 0.0,
-            pad11: 0.0,
+            y_stretch_3d: y_stretch_3d as f32,
+            pad10: ex_2d as f32,
+            pad11: ex_3d as f32,
         };
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&[uniforms]));
 
@@ -2473,7 +2524,7 @@ impl<'a> State<'a> {
                 let px_2d = (x as f64 * self.pos_scale + self.pos_translate[0]) as f32;
                 let py_2d = (((y - y_min) as f64 * y_stretch * self.pos_scale) + self.pos_translate[1]) as f32;
 
-                let model_pos = glam::vec4(lx, ly, (y - y_min) * y_stretch as f32 * 0.5 + 0.1, 1.0);
+                let model_pos = glam::vec4(lx, ly, (y - y_min) * y_stretch_3d as f32 + 0.1, 1.0);
                 let clip_pos = view_proj * model_pos;
                 let ndc = glam::vec3(clip_pos.x, clip_pos.y, clip_pos.z) / clip_pos.w.max(1e-6);
                 let px_3d = (ndc.x * 0.5 + 0.5) * self.size.width as f32;
@@ -2481,7 +2532,7 @@ impl<'a> State<'a> {
 
                 let final_x = px_2d + (px_3d - px_2d) * self.current_morph;
                 let final_y = py_2d + (py_3d - py_2d) * self.current_morph;
-                let final_z = ndc.z * self.current_morph;
+                let final_z = 0.6 + (ndc.z - 0.6) * self.current_morph;
 
                 [final_x, final_y, final_z]
             };
@@ -2614,21 +2665,24 @@ impl<'a> State<'a> {
                             };
                             let start_lx = active_stage.vertices[start_idx * 26 + 2] + (active_stage.vertices[(start_idx+1) * 26 + 2] - active_stage.vertices[start_idx * 26 + 2]) * t_start as f32;
                             let start_ly = active_stage.vertices[start_idx * 26 + 3] + (active_stage.vertices[(start_idx+1) * 26 + 3] - active_stage.vertices[start_idx * 26 + 3]) * t_start as f32;
+                            let start_ele = self.profile_points[start_idx][1] + (self.profile_points[start_idx+1][1] - self.profile_points[start_idx][1]) * t_start;
 
                             let t_end = if self.profile_points[end_idx+1][0] == self.profile_points[end_idx][0] { 0.0 } else {
                                 (end_x - self.profile_points[end_idx][0]) / (self.profile_points[end_idx+1][0] - self.profile_points[end_idx][0])
                             };
                             let end_lx = active_stage.vertices[end_idx * 26 + 2] + (active_stage.vertices[(end_idx+1) * 26 + 2] - active_stage.vertices[end_idx * 26 + 2]) * t_end as f32;
                             let end_ly = active_stage.vertices[end_idx * 26 + 3] + (active_stage.vertices[(end_idx+1) * 26 + 3] - active_stage.vertices[end_idx * 26 + 3]) * t_end as f32;
+                            let end_ele = self.profile_points[end_idx][1] + (self.profile_points[end_idx+1][1] - self.profile_points[end_idx][1]) * t_end;
 
                             let mid_lx = (start_lx + end_lx) * 0.5;
                             let mid_ly = (start_ly + end_ly) * 0.5;
+                            let mid_ele = (start_ele + end_ele) * 0.5;
                             let model_pos = glam::vec4(mid_lx, mid_ly, 0.0, 1.0);
                             let clip_pos = view_proj * model_pos;
                             let ndc = glam::vec3(clip_pos.x, clip_pos.y, clip_pos.z) / clip_pos.w.max(1e-6);
                             mid_x_3d = (ndc.x * 0.5 + 0.5) * self.size.width as f32;
                             mid_y_3d = (ndc.y * 0.5 + 0.5) * self.size.height as f32;
-                            depth = ndc.z * self.current_morph;
+                            depth = 0.6 + (ndc.z - 0.6) * self.current_morph;
                         }
 
                         // Interpolate between 2D and 3D screen space coordinates
@@ -2641,7 +2695,7 @@ impl<'a> State<'a> {
                         let h1 = row_h * s_size_pct * rel_scale;
                         
                         // We use a constant proportional offset from the profile bottom so it scales perfectly with zoom!
-                        let d1 = 1.35 * h1 * y_scale;
+                        let d1 = 0.75 * h1 * y_scale;
                         let anchor_y_pct = profile_bottom_y - d1;
                         
                         // We set a smaller line spacing (e.g. 0.65 * h1) to avoid a large gap between lines.
@@ -2795,7 +2849,19 @@ impl<'a> State<'a> {
                 occlusion_query_set: None,
             });
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-            pass.set_scissor_rect(352, 0, self.size.width - 352, self.size.height);
+            let scissor_left = if self.current_morph < 0.5 {
+                let rpw = (self.size.width as f32) - 350.0;
+                (350.0 + rpw * 0.1) as u32
+            } else {
+                352
+            };
+            let scissor_width = if self.current_morph < 0.5 {
+                let rpw = (self.size.width as f32) - 350.0;
+                (rpw * 0.8) as u32
+            } else {
+                self.size.width - 352
+            };
+            pass.set_scissor_rect(scissor_left, 0, scissor_width, self.size.height);
 
             pass.set_pipeline(&self.poly_render_pipeline);
             pass.set_bind_group(1, &self.shadow_bind_group, &[]);
@@ -2934,7 +3000,19 @@ impl<'a> State<'a> {
             }
 
             // 7. Reticule + graph text (scissored to graph area)
-            pass.set_scissor_rect(352, 0, self.size.width - 352, self.size.height);
+            let scissor_left = if self.current_morph < 0.5 {
+                let rpw = (self.size.width as f32) - 350.0;
+                (350.0 + rpw * 0.1) as u32
+            } else {
+                352
+            };
+            let scissor_width = if self.current_morph < 0.5 {
+                let rpw = (self.size.width as f32) - 350.0;
+                (rpw * 0.8) as u32
+            } else {
+                self.size.width - 352
+            };
+            pass.set_scissor_rect(scissor_left, 0, scissor_width, self.size.height);
             if self.current_morph < 0.5 {
                 pass.set_pipeline(&self.reticule_render_pipeline);
                 pass.draw(0..6, 0..1);
@@ -2985,9 +3063,9 @@ impl<'a> State<'a> {
                 // Fullscreen dim overlay
                 add_rect(0.0, 0.0, self.size.width as f32, self.size.height as f32, &mut bg_verts);
                 
-                // Settings Card backdrop (width 420, height 380) with local UV in pos.z/w
+                // Settings Card backdrop (width 420, height 560) with local UV in pos.z/w
                 let card_w = 420.0f32;
-                let card_h = 380.0f32;
+                let card_h = 560.0f32;
                 let x_min = cx - card_w * 0.5;
                 let x_max = cx + card_w * 0.5;
                 let y_min = cy - card_h * 0.5;
@@ -3044,10 +3122,10 @@ impl<'a> State<'a> {
                     let lbl_size = 0.5f32;
                     let metallic_depth = if self.use_metallic { 0.0 } else { 1.0 };
 
-                    // Render mode selection (local Y = 80.0)
+                    // Render mode selection (local Y = 110.0)
                     let label1 = "Rendu métallisé";
                     let (pos_lbl1, uvs_lbl1) = font.get_text_geometry(label1);
-                    let anchor_lbl1 = [x_min + 40.0, cy + 80.0 - 8.0];
+                    let anchor_lbl1 = [x_min + 40.0, cy + 110.0 - 8.0];
                     for k in 0..(pos_lbl1.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_lbl1[k*2], pos_lbl1[k*2+1]], uv: [uvs_lbl1[k*2], uvs_lbl1[k*2+1]], anchor: anchor_lbl1, size: lbl_size, depth: 0.0 });
                     }
@@ -3055,15 +3133,15 @@ impl<'a> State<'a> {
                     // Render mode shortcut indicator [T]
                     let sc1 = "[T]";
                     let (pos_sc1, uvs_sc1) = font.get_text_geometry(sc1);
-                    let anchor_sc1 = [cx + 160.0, cy + 80.0 - 8.0];
+                    let anchor_sc1 = [cx + 160.0, cy + 110.0 - 8.0];
                     for k in 0..(pos_sc1.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_sc1[k*2], pos_sc1[k*2+1]], uv: [uvs_sc1[k*2], uvs_sc1[k*2+1]], anchor: anchor_sc1, size: lbl_size, depth: 0.0 });
                     }
 
-                    // Brushed Metal selection (local Y = 40.0)
+                    // Brushed Metal selection (local Y = 70.0)
                     let label_brushed = "Effet brossé";
                     let (pos_lbl_b, uvs_lbl_b) = font.get_text_geometry(label_brushed);
-                    let anchor_lbl_b = [x_min + 40.0, cy + 40.0 - 8.0];
+                    let anchor_lbl_b = [x_min + 40.0, cy + 70.0 - 8.0];
                     let brushed_depth = if self.use_metallic { 0.0 } else { 1.0 };
                     for k in 0..(pos_lbl_b.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_lbl_b[k*2], pos_lbl_b[k*2+1]], uv: [uvs_lbl_b[k*2], uvs_lbl_b[k*2+1]], anchor: anchor_lbl_b, size: lbl_size, depth: brushed_depth });
@@ -3072,15 +3150,15 @@ impl<'a> State<'a> {
                     // Brushed Metal shortcut indicator [B]
                     let sc_brushed = "[B]";
                     let (pos_sc_b, uvs_sc_b) = font.get_text_geometry(sc_brushed);
-                    let anchor_sc_b = [cx + 160.0, cy + 40.0 - 8.0];
+                    let anchor_sc_b = [cx + 160.0, cy + 70.0 - 8.0];
                     for k in 0..(pos_sc_b.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_sc_b[k*2], pos_sc_b[k*2+1]], uv: [uvs_sc_b[k*2], uvs_sc_b[k*2+1]], anchor: anchor_sc_b, size: lbl_size, depth: brushed_depth });
                     }
 
-                    // White Sky selection (local Y = 0.0)
+                    // White Sky selection (local Y = 30.0)
                     let label_sky = "Ciel blanc";
                     let (pos_lbl_sky, uvs_lbl_sky) = font.get_text_geometry(label_sky);
-                    let anchor_lbl_sky = [x_min + 40.0, cy + 0.0 - 8.0];
+                    let anchor_lbl_sky = [x_min + 40.0, cy + 30.0 - 8.0];
                     for k in 0..(pos_lbl_sky.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_lbl_sky[k*2], pos_lbl_sky[k*2+1]], uv: [uvs_lbl_sky[k*2], uvs_lbl_sky[k*2+1]], anchor: anchor_lbl_sky, size: lbl_size, depth: metallic_depth });
                     }
@@ -3088,23 +3166,23 @@ impl<'a> State<'a> {
                     // White Sky shortcut indicator [W]
                     let sc_sky = "[W]";
                     let (pos_sc_sky, uvs_sc_sky) = font.get_text_geometry(sc_sky);
-                    let anchor_sc_sky = [cx + 160.0, cy + 0.0 - 8.0];
+                    let anchor_sc_sky = [cx + 160.0, cy + 30.0 - 8.0];
                     for k in 0..(pos_sc_sky.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_sc_sky[k*2], pos_sc_sky[k*2+1]], uv: [uvs_sc_sky[k*2], uvs_sc_sky[k*2+1]], anchor: anchor_sc_sky, size: lbl_size, depth: metallic_depth });
                     }
 
-                    // Lissage selection (local Y = -40.0)
+                    // Lissage selection (local Y = -20.0)
                     let label_smooth = format!("Lissage: {}", self.settings.metallic_smoothing);
                     let (pos_lbl_s, uvs_lbl_s) = font.get_text_geometry(&label_smooth);
-                    let anchor_lbl_s = [x_min + 40.0, cy - 40.0 - 8.0];
+                    let anchor_lbl_s = [x_min + 40.0, cy - 20.0 - 8.0];
                     for k in 0..(pos_lbl_s.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_lbl_s[k*2], pos_lbl_s[k*2+1]], uv: [uvs_lbl_s[k*2], uvs_lbl_s[k*2+1]], anchor: anchor_lbl_s, size: lbl_size, depth: metallic_depth });
                     }
 
-                    // Neon Green selection (local Y = -125.0)
+                    // Neon Green selection (local Y = -100.0)
                     let label2 = "Vert néon";
                     let (pos_lbl2, uvs_lbl2) = font.get_text_geometry(label2);
-                    let anchor_lbl2 = [x_min + 40.0, cy - 125.0 - 8.0];
+                    let anchor_lbl2 = [x_min + 40.0, cy - 100.0 - 8.0];
                     for k in 0..(pos_lbl2.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_lbl2[k*2], pos_lbl2[k*2+1]], uv: [uvs_lbl2[k*2], uvs_lbl2[k*2+1]], anchor: anchor_lbl2, size: lbl_size, depth: 0.0 });
                     }
@@ -3112,9 +3190,26 @@ impl<'a> State<'a> {
                     // Neon Green shortcut indicator [C]
                     let sc2 = "[C]";
                     let (pos_sc2, uvs_sc2) = font.get_text_geometry(sc2);
-                    let anchor_sc2 = [cx + 160.0, cy - 125.0 - 8.0];
+                    let anchor_sc2 = [cx + 160.0, cy - 100.0 - 8.0];
                     for k in 0..(pos_sc2.len() / 2) {
                         settings_text_vertices.push(TextVertex { pos: [pos_sc2[k*2], pos_sc2[k*2+1]], uv: [uvs_sc2[k*2], uvs_sc2[k*2+1]], anchor: anchor_sc2, size: lbl_size, depth: 0.0 });
+                    }
+
+                    // Exagération 2D selection (local Y = -150.0)
+                    let (ex_2d, ex_3d) = self.get_current_race_exaggeration();
+                    let label_ex2d = format!("Exagération 2D: {:.0}%", ex_2d * 100.0);
+                    let (pos_lbl_ex2d, uvs_lbl_ex2d) = font.get_text_geometry(&label_ex2d);
+                    let anchor_lbl_ex2d = [x_min + 40.0, cy - 150.0 - 8.0];
+                    for k in 0..(pos_lbl_ex2d.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl_ex2d[k*2], pos_lbl_ex2d[k*2+1]], uv: [uvs_lbl_ex2d[k*2], uvs_lbl_ex2d[k*2+1]], anchor: anchor_lbl_ex2d, size: lbl_size, depth: 0.0 });
+                    }
+
+                    // Exagération 3D selection (local Y = -210.0)
+                    let label_ex3d = format!("Exagération 3D: {:.0}%", ex_3d * 100.0);
+                    let (pos_lbl_ex3d, uvs_lbl_ex3d) = font.get_text_geometry(&label_ex3d);
+                    let anchor_lbl_ex3d = [x_min + 40.0, cy - 210.0 - 8.0];
+                    for k in 0..(pos_lbl_ex3d.len() / 2) {
+                        settings_text_vertices.push(TextVertex { pos: [pos_lbl_ex3d[k*2], pos_lbl_ex3d[k*2+1]], uv: [uvs_lbl_ex3d[k*2], uvs_lbl_ex3d[k*2+1]], anchor: anchor_lbl_ex3d, size: lbl_size, depth: 0.0 });
                     }
 
                     settings_text_buf = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -3455,15 +3550,32 @@ fn main() {
             WindowEvent::CursorMoved { position, .. } => {
                 state.mouse_pos = [position.x as f32, (state.size.height as f64 - position.y) as f32];
                 if state.show_settings {
-                    if state.is_dragging_slider {
+                    if state.dragging_slider != DraggingSlider::None {
                         let cx = state.size.width as f32 / 2.0;
                         let mx = state.mouse_pos[0];
                         let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
-                        let val = 1 + (ratio * 999.0).round() as u32;
-                        if val != state.settings.metallic_smoothing {
-                            state.settings.metallic_smoothing = val;
-                            state.settings.save();
-                            state.rebuild_poly_buffers();
+                        match state.dragging_slider {
+                            DraggingSlider::Lissage => {
+                                let val = 1 + (ratio * 999.0).round() as u32;
+                                if val != state.settings.metallic_smoothing {
+                                    state.settings.metallic_smoothing = val;
+                                    state.settings.save();
+                                    state.rebuild_poly_buffers();
+                                }
+                            }
+                            DraggingSlider::Exaggeration2d => {
+                                let (old_2d, old_3d) = state.get_current_race_exaggeration();
+                                if ratio != old_2d {
+                                    state.set_current_race_exaggeration(ratio, old_3d);
+                                }
+                            }
+                            DraggingSlider::Exaggeration3d => {
+                                let (old_2d, old_3d) = state.get_current_race_exaggeration();
+                                if ratio != old_3d {
+                                    state.set_current_race_exaggeration(old_2d, ratio);
+                                }
+                            }
+                            DraggingSlider::None => {}
                         }
                         state.window.request_redraw();
                     }
@@ -3511,7 +3623,7 @@ fn main() {
             }
             WindowEvent::MouseInput { state: s, button, .. } => {
                 if *button == MouseButton::Left && *s == ElementState::Released {
-                    state.is_dragging_slider = false;
+                    state.dragging_slider = DraggingSlider::None;
                 }
                 if state.show_settings {
                     if *button == MouseButton::Left && *s == ElementState::Pressed {
@@ -3520,9 +3632,9 @@ fn main() {
                         let mx = state.mouse_pos[0];
                         let my = state.mouse_pos[1];
                         
-                        if mx >= cx - 210.0 && mx <= cx + 210.0 && my >= cy - 190.0 && my <= cy + 190.0 {
-                            if my >= cy + 60.0 {
-                                // Switch 1: Rendu métallisé (Y center +80.0, band [+60, +190])
+                        if mx >= cx - 210.0 && mx <= cx + 210.0 && my >= cy - 280.0 && my <= cy + 280.0 {
+                            if my >= cy + 90.0 {
+                                // Switch 1: Rendu métallisé (Y center +110.0, band >= +90)
                                 state.use_metallic = !state.use_metallic;
                                 state.settings.use_metallic = state.use_metallic;
                                 state.settings.save();
@@ -3534,8 +3646,8 @@ fn main() {
                                     start_t: state.settings_switch_t,
                                     target_t,
                                 });
-                            } else if my >= cy + 20.0 {
-                                // Switch 2: Effet brossé (Y center +40.0, band [+20, +60])
+                            } else if my >= cy + 50.0 {
+                                // Switch 2: Effet brossé (Y center +70.0, band [+50, +90])
                                 if state.use_metallic {
                                     state.use_brushed = !state.use_brushed;
                                     state.settings.use_brushed = state.use_brushed;
@@ -3548,8 +3660,8 @@ fn main() {
                                         target_t,
                                     });
                                 }
-                            } else if my >= cy - 20.0 {
-                                // Switch 3: Ciel blanc (Y center 0.0, band [-20, +20])
+                            } else if my >= cy + 10.0 {
+                                // Switch 3: Ciel blanc (Y center +30.0, band [+10, +50])
                                 if state.use_metallic {
                                     state.use_white_sky = !state.use_white_sky;
                                     state.settings.white_sky = state.use_white_sky;
@@ -3562,17 +3674,17 @@ fn main() {
                                         target_t,
                                     });
                                 }
-                            } else if my >= cy - 97.5 {
-                                // Slider: Lissage (Y center -70.0, band [-97.5, -20])
+                            } else if my >= cy - 75.0 {
+                                // Slider 1: Lissage (Y center -50.0, band [-75, +10])
                                 if state.use_metallic {
-                                    state.is_dragging_slider = true;
+                                    state.dragging_slider = DraggingSlider::Lissage;
                                     let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
                                     state.settings.metallic_smoothing = 1 + (ratio * 999.0).round() as u32;
                                     state.settings.save();
                                     state.rebuild_poly_buffers();
                                 }
-                            } else {
-                                // Switch 4: Vert néon (Y center -125.0, band [-190, -97.5])
+                            } else if my >= cy - 125.0 {
+                                // Switch 4: Vert néon (Y center -100.0, band [-125, -75])
                                 state.use_neon_green = !state.use_neon_green;
                                 state.settings.use_neon_green = state.use_neon_green;
                                 state.settings.save();
@@ -3590,6 +3702,18 @@ fn main() {
                                     start_t: state.settings_neon_green_t,
                                     target_t,
                                 });
+                            } else if my >= cy - 210.0 {
+                                // Slider 2: Exagération 2D (Y center -180.0, band [-210, -125])
+                                state.dragging_slider = DraggingSlider::Exaggeration2d;
+                                let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
+                                let (_, old_3d) = state.get_current_race_exaggeration();
+                                state.set_current_race_exaggeration(ratio, old_3d);
+                            } else {
+                                // Slider 3: Exagération 3D (Y center -240.0, band [-280, -210])
+                                state.dragging_slider = DraggingSlider::Exaggeration3d;
+                                let ratio = ((mx - (cx - 170.0)) / 340.0).clamp(0.0, 1.0);
+                                let (old_2d, _) = state.get_current_race_exaggeration();
+                                state.set_current_race_exaggeration(old_2d, ratio);
                             }
                             state.window.request_redraw();
                         } else {

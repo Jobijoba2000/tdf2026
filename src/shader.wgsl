@@ -32,7 +32,7 @@ struct Uniforms {
     pad6: f32,                 // 264-268
     pad7: f32,                 // 268-272
     pad8: f32,                 // 272-276
-    pad9: f32,                 // 276-280
+    y_stretch_3d: f32,         // 276-280
     pad10: f32,                // 280-284
     pad11: f32,                // 284-288
 };
@@ -89,10 +89,10 @@ fn vs_main(model: VertexInput) -> VertexOutput {
     let screen_pos_2d = p2d + normal * model.side * uniforms.thickness;
     let clip_2d = vec4<f32>((screen_pos_2d / uniforms.resolution) * 2.0 - 1.0, 0.5, 1.0);
 
-    // Position 3D (Trace) - Reduced exaggeration (0.5x) + Tiny offset to avoid Z-fighting
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
-    let prev_world = vec4<f32>(model.prev.z, model.prev.w, (model.prev.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
-    let next_world = vec4<f32>(model.next.z, model.next.w, (model.next.y - uniforms.y_min) * uniforms.y_stretch * 0.5 + 0.1, 1.0);
+    // Position 3D (Trace) - Dynamic exaggeration (y_stretch_3d) + Tiny offset to avoid Z-fighting
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch_3d + 0.1, 1.0);
+    let prev_world = vec4<f32>(model.prev.z, model.prev.w, (model.prev.y - uniforms.y_min) * uniforms.y_stretch_3d + 0.1, 1.0);
+    let next_world = vec4<f32>(model.next.z, model.next.w, (model.next.y - uniforms.y_min) * uniforms.y_stretch_3d + 0.1, 1.0);
     
     let p3d_clip = uniforms.view_proj * world_pos;
     let prev3d_clip = uniforms.view_proj * prev_world;
@@ -156,8 +156,8 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     }
     let clip_2d = vec4<f32>((p2d_scr / uniforms.resolution) * 2.0 - 1.0, depth, 1.0);
 
-    // Position 3D - Reduced exaggeration (0.5x) - Grounded at Z=0
-    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5, 1.0);
+    // Position 3D - Dynamic exaggeration (y_stretch_3d) - Grounded at Z=0
+    let world_pos = vec4<f32>(model.pos.z, model.pos.w, (model.pos.y - uniforms.y_min) * uniforms.y_stretch_3d, 1.0);
     let clip_3d = uniforms.view_proj * world_pos;
 
     // Morphing progressif par distance
@@ -171,7 +171,7 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
     out.morph = local_morph;
     out.normal = vec3<f32>(model.normal, 0.0);
     
-    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 * local_morph;
+    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch_3d * local_morph;
     let world_pos_morphed = vec4<f32>(model.pos.z, model.pos.w, z_morphed, 1.0);
     out.shadow_pos = uniforms.light_space_matrix * world_pos_morphed;
     
@@ -182,12 +182,11 @@ fn vs_poly(model: PolyVertexInput) -> VertexOutput {
 fn vs_shadow(model: PolyVertexInput) -> @builtin(position) vec4<f32> {
     let stagger = 0.5;
     let local_morph = clamp((uniforms.morph * (1.0 + stagger)) - (model.pos.x / uniforms.max_dist) * stagger, 0.0, 1.0);
-    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch * 0.5 * local_morph;
+    let z_morphed = (model.pos.y - uniforms.y_min) * uniforms.y_stretch_3d * local_morph;
     let world_pos = vec4<f32>(model.pos.z, model.pos.w, z_morphed, 1.0);
     return uniforms.light_space_matrix * world_pos;
 }
-
-
+    
 @vertex
 fn vs_ui(@location(0) pos_and_uv: vec4<f32>) -> VertexOutput {
     var out: VertexOutput;
@@ -220,7 +219,7 @@ fn sd_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
-    let half_size = vec2<f32>(210.0, 190.0);
+    let half_size = vec2<f32>(210.0, 280.0);
     let local_p = in.uv * half_size;
 
     let d_card = sd_rounded_rect(local_p, half_size, 24.0);
@@ -228,7 +227,7 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
 
     var col = vec3<f32>(0.07, 0.08, 0.11);
 
-    let light_pos = vec2<f32>(0.0, 190.0);
+    let light_pos = vec2<f32>(0.0, 280.0);
     let dist_to_light = length(local_p - light_pos);
     col += vec3<f32>(smoothstep(300.0, 0.0, dist_to_light) * 0.05);
 
@@ -243,8 +242,8 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     let is_metallic_active = uniforms.pad1;
     let dim_opacity = mix(0.35, 1.0, is_metallic_active);
 
-    // Switch 1: Rendu metallise (Y = 80)
-    let sc1 = vec2<f32>(100.0, 80.0);
+    // Switch 1: Rendu metallise (Y = 110)
+    let sc1 = vec2<f32>(100.0, 110.0);
     let d_sw1 = sd_rounded_rect(local_p - sc1, switch_half, 14.0);
     let t1 = uniforms.pad3;
     let sw1_col = mix(switch_bg_off, uniforms.color.rgb, t1);
@@ -255,8 +254,8 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk1) * (1.0 - smoothstep(0.5, -0.5, dk1)) * 0.65);
     col = mix(col, knob_col, smoothstep(0.5, -0.5, dk1));
 
-    // Switch 2: Effet brosse (Y = 40)
-    let sc2 = vec2<f32>(100.0, 40.0);
+    // Switch 2: Effet brosse (Y = 70)
+    let sc2 = vec2<f32>(100.0, 70.0);
     let d_sw2 = sd_rounded_rect(local_p - sc2, switch_half, 14.0);
     let t2 = uniforms.pad6;
     let sw2_col = mix(switch_bg_off, uniforms.color.rgb, t2);
@@ -267,8 +266,8 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk2) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk2)) * 0.65);
     col = mix(col, knob_col, smoothstep(0.5, -0.5, dk2) * dim_opacity);
 
-    // Switch 3: Ciel blanc (Y = 0)
-    let sc_sky = vec2<f32>(100.0, 0.0);
+    // Switch 3: Ciel blanc (Y = 30)
+    let sc_sky = vec2<f32>(100.0, 30.0);
     let d_sw_sky = sd_rounded_rect(local_p - sc_sky, switch_half, 14.0);
     let t_sky = uniforms.pad8;
     let sw_sky_col = mix(switch_bg_off, uniforms.color.rgb, t_sky);
@@ -279,8 +278,8 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk_sky) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk_sky)) * 0.65);
     col = mix(col, knob_col, smoothstep(0.5, -0.5, dk_sky) * dim_opacity);
 
-    // Slider: Lissage (Y = -70)
-    let sl_center = vec2<f32>(0.0, -70.0);
+    // Slider 1: Lissage (Y = -50)
+    let sl_center = vec2<f32>(0.0, -50.0);
     let d_track = sd_rounded_rect(local_p - sl_center, vec2<f32>(170.0, 3.0), 3.0);
     let knob_x4 = -170.0 + 340.0 * uniforms.pad7;
     let is_left = step(local_p.x - sl_center.x, knob_x4);
@@ -291,8 +290,8 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     col = mix(col, col * 0.3, smoothstep(3.0, -1.0, dk4) * dim_opacity * (1.0 - smoothstep(0.5, -0.5, dk4)) * 0.65);
     col = mix(col, knob_col, smoothstep(0.5, -0.5, dk4) * dim_opacity);
 
-    // Switch 4: Vert neon (Y = -125)
-    let sc4 = vec2<f32>(100.0, -125.0);
+    // Switch 4: Vert neon (Y = -100)
+    let sc4 = vec2<f32>(100.0, -100.0);
     let d_sw4 = sd_rounded_rect(local_p - sc4, switch_half, 14.0);
     let t4 = uniforms.pad4;
     let sw4_col = mix(switch_bg_off, vec3<f32>(0.18, 1.0, 0.18), t4);
@@ -302,6 +301,30 @@ fn fs_settings_card(in: VertexOutput) -> @location(0) vec4<f32> {
     let dk4b = length(local_p - kp4b) - 10.0;
     col = mix(col, col * 0.3, smoothstep(4.0, -1.0, dk4b) * (1.0 - smoothstep(0.5, -0.5, dk4b)) * 0.65);
     col = mix(col, knob_col, smoothstep(0.5, -0.5, dk4b));
+
+    // Slider 2: Exagération 2D (Y = -180)
+    let sl2_center = vec2<f32>(0.0, -180.0);
+    let d_track2 = sd_rounded_rect(local_p - sl2_center, vec2<f32>(170.0, 3.0), 3.0);
+    let knob_x2 = -170.0 + 340.0 * uniforms.pad10;
+    let is_left2 = step(local_p.x - sl2_center.x, knob_x2);
+    let track_col2 = mix(switch_bg_off, uniforms.color.rgb, is_left2);
+    col = mix(col, track_col2, smoothstep(0.5, -0.5, d_track2));
+    let kp2d = sl2_center + vec2<f32>(knob_x2, 0.0);
+    let dk2d = length(local_p - kp2d) - 8.0;
+    col = mix(col, col * 0.3, smoothstep(3.0, -1.0, dk2d) * (1.0 - smoothstep(0.5, -0.5, dk2d)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk2d));
+
+    // Slider 3: Exagération 3D (Y = -240)
+    let sl3_center = vec2<f32>(0.0, -240.0);
+    let d_track3 = sd_rounded_rect(local_p - sl3_center, vec2<f32>(170.0, 3.0), 3.0);
+    let knob_x3 = -170.0 + 340.0 * uniforms.pad11;
+    let is_left3 = step(local_p.x - sl3_center.x, knob_x3);
+    let track_col3 = mix(switch_bg_off, uniforms.color.rgb, is_left3);
+    col = mix(col, track_col3, smoothstep(0.5, -0.5, d_track3));
+    let kp3d = sl3_center + vec2<f32>(knob_x3, 0.0);
+    let dk3d = length(local_p - kp3d) - 8.0;
+    col = mix(col, col * 0.3, smoothstep(3.0, -1.0, dk3d) * (1.0 - smoothstep(0.5, -0.5, dk3d)) * 0.65);
+    col = mix(col, knob_col, smoothstep(0.5, -0.5, dk3d));
 
     return vec4<f32>(col, smoothstep(0.5, -0.5, d_card) * 0.96);
 }
